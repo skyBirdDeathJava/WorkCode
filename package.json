@@ -1,0 +1,12 @@
+{
+  "name": "workcode",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WorkCode — VS Code 插件形态的编程 Agent",
+  "scripts": {
+    "build:shared": "pnpm -C shared run build",
+    "build:extension": "pnpm -C extension run compile",
+    "build": "pnpm build:shared && pnpm build:extension",
+    "typecheck": "pnpm -C shared run typecheck && pnpm -C extension run typecheck"
+  }
+}

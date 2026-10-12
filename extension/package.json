@@ -1,0 +1,107 @@
+{
+  "name": "workcode",
+  "displayName": "WorkCode",
+  "version": "0.1.0",
+  "description": "VS Code 插件形态的编程 Agent（本地 Python 服务 + DeepSeek）",
+  "publisher": "workcode",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "workcode",
+          "title": "WorkCode",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "workcode": [
+        {
+          "type": "webview",
+          "id": "workcode.chat",
+          "name": "聊天",
+          "contextualTitle": "WorkCode"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "workcode.chat",
+        "title": "WorkCode: 打开聊天"
+      },
+      {
+        "command": "workcode.explain",
+        "title": "WorkCode: 解释选中代码"
+      },
+      {
+        "command": "workcode.newSession",
+        "title": "WorkCode: 新建会话"
+      },
+      {
+        "command": "workcode.setApiKey",
+        "title": "WorkCode: 设置 API Key"
+      }
+    ],
+    "configuration": {
+      "title": "WorkCode",
+      "properties": {
+        "workcode.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "DeepSeek API Key（明文存储于配置；推荐用 “WorkCode: 设置 API Key” 命令存入 SecretStorage）",
+          "markdownDescription": "DeepSeek API Key（明文存储于配置；推荐用 `WorkCode: 设置 API Key` 命令存入 SecretStorage）"
+        },
+        "workcode.model": {
+          "type": "string",
+          "default": "deepseek/deepseek-chat",
+          "description": "模型标识（LiteLLM 格式）"
+        },
+        "workcode.servicePort": {
+          "type": "number",
+          "default": 4877,
+          "description": "本地 Agent 服务端口"
+        },
+        "workcode.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python 可执行文件路径；留空自动检测（优先使用项目 .venv，其次 python3）"
+        },
+        "workcode.serviceDir": {
+          "type": "string",
+          "default": "",
+          "description": "agent-service 目录；留空时按插件路径推导（../agent-service）"
+        },
+        "workcode.mock": {
+          "type": "boolean",
+          "default": false,
+          "description": "Mock 模式：不调用真实模型，用于无 API Key 时验证链路"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -b",
+    "watch": "tsc -b --watch",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "@workcode/shared": "workspace:*",
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.5.0"
+  }
+}

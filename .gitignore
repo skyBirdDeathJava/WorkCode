@@ -1,0 +1,29 @@
+# Node
+node_modules/
+dist/
+out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+agent-service/tests/tmp/
+
+# TypeScript 构建缓存
+*.tsbuildinfo
+
+# 本地密钥与配置（绝不允许提交）
+.env
+agent-service/.env
+*.local.env
+
+# 会话数据
+.workcode/
+sessions/
+
+# VS Code / IDE（保留 extension/.vscode 下的 F5 调试配置）
+.idea/
+.vscode/
+!extension/.vscode/
+*.log

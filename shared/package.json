@@ -1,0 +1,15 @@
+{
+  "name": "@workcode/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WorkCode 插件与服务共享的协议定义（唯一事实来源）",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}
