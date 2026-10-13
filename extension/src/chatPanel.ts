@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import type { DiffPreviewPayload, TerminalExecPayload } from '@workcode/shared';
 import { buildContextSummary, buildEditorContext } from './editorContext';
@@ -42,6 +43,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case 'resumeSession':
           void this.client.resumeSession(String(msg.sessionId));
+          break;
+        case 'pickFile':
+          void this.pickFileForReference();
           break;
         case 'ready':
           this.pushContext();
@@ -104,6 +108,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     void this.view?.webview.postMessage({ type: 'context', payload: buildContextSummary() });
   }
 
+  /** 选择工作区文件，把路径作为 @引用 插入聊天输入框。 */
+  private async pickFileForReference(): Promise<void> {
+    const files = await getWorkspaceFiles();
+    if (files.length === 0) {
+      void vscode.window.showInformationMessage('工作区里没有可引用的文件。');
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      files.map((f) => ({ label: path.basename(f), description: f })),
+      { placeHolder: '选择要 @引用的文件' }
+    );
+    if (picked) {
+      void this.view?.webview.postMessage({ type: 'insertFile', path: picked.description });
+    }
+  }
+
   /** 拉取历史会话列表并推给 Webview 渲染。 */
   private async sendSessionList(): Promise<void> {
     console.log('[workcode] 宿主收到 listSessions，开始拉取');
@@ -123,6 +143,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private postEvent(evt: ServerEvent): void {
     void this.view?.webview.postMessage({ type: 'event', event: evt });
   }
+}
+
+/** 列出工作区里的文件（跳过 node_modules/.venv/dist 等）。 */
+async function getWorkspaceFiles(): Promise<string[]> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return [];
+  const uris = await vscode.workspace.findFiles(
+    '**/*',
+    '**/{node_modules,.venv,dist,out,build,.git,.idea,.workcode}/**',
+    500
+  );
+  return uris.map((u) => u.fsPath);
 }
 
 function getWebviewHtml(): string {
@@ -240,6 +272,7 @@ function getWebviewHtml(): string {
     <textarea id="input" placeholder="输入问题，Enter 发送 / Shift+Enter 换行"></textarea>
     <div class="btns">
       <button id="send" class="primary">发送</button>
+      <button id="atBtn" title="引用文件 (@)">@</button>
       <button id="historyBtn" title="历史会话">🕘</button>
       <button id="cancel">停止</button>
       <button id="new">新会话</button>
@@ -487,6 +520,14 @@ function getWebviewHtml(): string {
     vscode.postMessage({ type: 'send', content });
   }
 
+  function insertFileRef(path) {
+    const input = document.getElementById('input');
+    const cursor = input.selectionStart ?? input.value.length;
+    const at = cursor > 0 && input.value[cursor - 1] !== '@' ? '@' : '';
+    input.value = input.value.slice(0, cursor) + at + path + ' ' + input.value.slice(cursor);
+    input.focus();
+    input.selectionStart = input.selectionEnd = cursor + at.length + path.length;
+  }
   function showHistory() {
     console.log('[workcode] showHistory 被点击');
     messages.classList.add('hidden');
@@ -556,6 +597,10 @@ function getWebviewHtml(): string {
       renderSessionList(msg.sessions || []);
       return;
     }
+    if (msg.type === 'insertFile') {
+      insertFileRef(msg.path || '');
+      return;
+    }
     if (msg.type === 'context') {
       renderContext(msg.payload);
       return;
@@ -613,6 +658,7 @@ function getWebviewHtml(): string {
   });
 
   document.getElementById('send').addEventListener('click', send);
+  document.getElementById('atBtn').addEventListener('click', () => vscode.postMessage({ type: 'pickFile' }));
   document.getElementById('historyBtn').addEventListener('click', showHistory);
   document.getElementById('historyClose').addEventListener('click', closeHistory);
   document.getElementById('cancel').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));

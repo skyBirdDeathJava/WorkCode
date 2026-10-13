@@ -69,3 +69,51 @@ async def test_compact_under_budget_noop() -> None:
     new_messages, summary = await compact(messages, MockModel(), max_tokens=20000)
     assert new_messages is None
     assert summary == ""
+
+
+def test_load_project_memory_priority(tmp_path: Path) -> None:
+    from workcode.agent.context import load_project_memory
+
+    (tmp_path / "WorkCode.md").write_text("记忆A", encoding="utf-8")
+    (tmp_path / "CLAUDE.md").write_text("记忆B", encoding="utf-8")
+    # WorkCode.md 优先
+    assert "记忆A" in load_project_memory(str(tmp_path))
+    # 只有 CLAUDE.md 时用 CLAUDE.md
+    (tmp_path / "WorkCode.md").unlink()
+    assert "记忆B" in load_project_memory(str(tmp_path))
+    # 都没有 → 空
+    (tmp_path / "CLAUDE.md").unlink()
+    assert load_project_memory(str(tmp_path)) == ""
+
+
+def test_build_messages_injects_memory(tmp_path: Path) -> None:
+    from workcode.agent.context import build_messages, SYSTEM_PROMPT
+
+    (tmp_path / "WorkCode.md").write_text("遵守测试规范", encoding="utf-8")
+    messages = build_messages(
+        [{"role": "user", "content": "你好"}],
+        {"workspaceRoot": str(tmp_path), "currentFile": None, "selection": None, "openFiles": []},
+        max_tokens=20000,
+    )
+    system = messages[0]["content"]
+    assert "项目记忆" in system
+    assert "遵守测试规范" in system
+
+
+def test_render_user_message_resolves_at_refs(tmp_path: Path) -> None:
+    from workcode.agent.context import render_user_message
+
+    (tmp_path / "greet.py").write_text("def greet(): pass\n", encoding="utf-8")
+    ctx = {"workspaceRoot": str(tmp_path), "currentFile": None, "selection": None, "openFiles": []}
+
+    rendered = render_user_message("请看看 @greet.py 这个文件", ctx)
+    assert "【引用文件】greet.py" in rendered
+    assert "def greet(): pass" in rendered
+
+
+def test_render_user_message_ignores_missing_ref(tmp_path: Path) -> None:
+    from workcode.agent.context import render_user_message
+
+    ctx = {"workspaceRoot": str(tmp_path), "currentFile": None, "selection": None, "openFiles": []}
+    rendered = render_user_message("联系 @nobody 一下", ctx)
+    assert "【引用文件】" not in rendered

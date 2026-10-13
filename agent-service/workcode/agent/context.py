@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from ..protocol import EditorContext
 from ..session.store import SUMMARY_PREFIX
+
+# @ 引用文件：匹配 @后面紧跟的路径 token（直到空白/标点）
+AT_REF_RE = re.compile(r"@([^\s,;，。！？]+)")
+
+# 项目记忆文件名（优先级从高到低）
+MEMORY_FILE_NAMES = ("WorkCode.md", "CLAUDE.md")
+
+MAX_MEMORY_CHARS = 8000
+MAX_REF_FILE_CHARS = 6000
 
 MAX_FILE_BODY_CHARS = 8000
 
@@ -34,12 +46,52 @@ def estimate_total_tokens(messages: list[dict]) -> int:
     return sum(estimate_tokens(m.get("content", "")) for m in messages)
 
 
+def load_project_memory(workspace_root: str) -> str:
+    """读取工作区根目录的 WorkCode.md（或 CLAUDE.md），作为项目记忆注入。"""
+    if not workspace_root:
+        return ""
+    root = Path(workspace_root)
+    for name in MEMORY_FILE_NAMES:
+        p = root / name
+        if p.is_file():
+            try:
+                return p.read_text(encoding="utf-8", errors="replace")[:MAX_MEMORY_CHARS]
+            except OSError:
+                return ""
+    return ""
+
+
+def resolve_refs(content: str, workspace_root: str) -> list[tuple[str, str]]:
+    """解析消息里的 @路径 引用，读取对应文件内容（相对工作区根目录）。"""
+    refs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for m in AT_REF_RE.finditer(content):
+        ref = m.group(1)
+        if ref in seen:
+            continue
+        seen.add(ref)
+        p = Path(ref)
+        if not p.is_absolute() and workspace_root:
+            p = Path(workspace_root) / ref
+        if p.is_file() and p.stat().st_size <= 256 * 1024:
+            try:
+                body = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            refs.append((ref, body[:MAX_REF_FILE_CHARS]))
+    return refs
+
+
 def render_user_message(content: str, ctx: EditorContext | dict) -> str:
-    """把编辑器上下文折叠进用户消息。"""
+    """把编辑器上下文 + @ 引用文件折叠进用户消息。"""
     parts = [content]
 
     if isinstance(ctx, dict):
         ctx = EditorContext.model_validate(ctx)
+
+    # @ 引用文件：把被引用文件的内容注入
+    for ref, body in resolve_refs(content, ctx.workspaceRoot):
+        parts.append(f"【引用文件】{ref}\n```\n{body}\n```")
 
     if ctx.currentFile:
         f = ctx.currentFile
@@ -64,8 +116,14 @@ def build_messages(
     ctx: EditorContext | dict,
     max_tokens: int,
 ) -> list[dict]:
-    """system + 历史，token 超限时从最早的非 system 消息开始裁剪。"""
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
+    """system + 历史（含 WorkCode.md 项目记忆），token 超限时裁剪最早消息。"""
+    workspace_root = ctx.get("workspaceRoot", "") if isinstance(ctx, dict) else getattr(ctx, "workspaceRoot", "")
+    system_prompt = SYSTEM_PROMPT
+    memory = load_project_memory(workspace_root)
+    if memory:
+        system_prompt += f"\n\n【项目记忆（WorkCode.md）】\n{memory}"
+
+    messages = [{"role": "system", "content": system_prompt}] + history
     while len(messages) > 2:
         total = sum(estimate_tokens(m.get("content", "")) for m in messages)
         if total <= max_tokens:
