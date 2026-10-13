@@ -1,7 +1,8 @@
-"""会话持久化（JSONL）、压缩摘要、恢复的单元测试。"""
+"""会话持久化（JSONL）、压缩摘要、恢复、Web/git 的单元测试。"""
 
 from __future__ import annotations
 
+import asyncio
 import pytest
 from pathlib import Path
 
@@ -126,3 +127,32 @@ def test_build_messages_mode_hint(tmp_path: Path) -> None:
     for mode, keyword in (("manual", "Manual"), ("auto", "Auto"), ("plan", "Plan")):
         messages = build_messages([{"role": "user", "content": "hi"}], ctx, 20000, mode=mode)
         assert keyword in messages[0]["content"], f"mode={mode} 应有提示"
+
+
+def test_load_git_context(tmp_path: Path) -> None:
+    import subprocess
+
+    from workcode.agent.context import load_git_context
+
+    # 非 git 目录 → 空
+    assert load_git_context(str(tmp_path)) == ""
+
+    # 初始化 git 仓库 → 有分支信息
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    ctx = load_git_context(str(tmp_path))
+    assert "分支" in ctx or "最近提交" in ctx or "变更" in ctx
+
+
+def test_web_fetch_ssrf_blocked() -> None:
+    from workcode.tools.web import web_fetch
+
+    ok, out = asyncio.run(web_fetch("http://127.0.0.1:4877/healthz"))
+    assert not ok
+    assert "拒绝" in out
+
+
+def test_ddg_real_url_decoding() -> None:
+    from workcode.tools.web import _ddg_real_url
+
+    url = _ddg_real_url("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdoc&rut=abc")
+    assert "example.com/doc" in url

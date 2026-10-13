@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 from ..protocol import EditorContext
@@ -59,6 +60,38 @@ def load_project_memory(workspace_root: str) -> str:
             except OSError:
                 return ""
     return ""
+
+
+def load_git_context(workspace_root: str) -> str:
+    """注入 git 状态：分支、工作区变更、最近提交（让 Agent 感知仓库状态）。非 git 仓库返回空。"""
+    if not workspace_root:
+        return ""
+    try:
+        status = subprocess.run(
+            ["git", "-C", workspace_root, "status", "--short", "--branch"],
+            capture_output=True, text=True, timeout=2,
+        )
+        log = subprocess.run(
+            ["git", "-C", workspace_root, "log", "--oneline", "-5"],
+            capture_output=True, text=True, timeout=2,
+        )
+    except Exception:
+        return ""
+    if status.returncode != 0:
+        return ""  # 不是 git 仓库
+    lines: list[str] = []
+    for ln in status.stdout.strip().splitlines():
+        if ln.startswith("## "):
+            branch = ln[3:].split("...")[0]
+            lines.append(f"分支: {branch}")
+        elif ln.strip():
+            lines.append(f"变更: {ln.strip()}")
+    if not lines:
+        lines.append("分支: (未知) 工作区干净")
+    commits = log.stdout.strip()
+    if commits:
+        lines.append("最近提交:\n" + commits)
+    return "\n".join(lines)
 
 
 def resolve_refs(content: str, workspace_root: str) -> list[tuple[str, str]]:
@@ -126,8 +159,9 @@ def build_messages(
     ctx: EditorContext | dict,
     max_tokens: int,
     mode: str = "manual",
+    extra_system: str = "",
 ) -> list[dict]:
-    """system + 历史（含 WorkCode.md 项目记忆 + 权限模式），token 超限时裁剪最早消息。"""
+    """system + 历史（含项目记忆 + 权限模式 + git 上下文），token 超限时裁剪最早消息。"""
     workspace_root = ctx.get("workspaceRoot", "") if isinstance(ctx, dict) else getattr(ctx, "workspaceRoot", "")
     system_prompt = SYSTEM_PROMPT
     memory = load_project_memory(workspace_root)
@@ -136,6 +170,8 @@ def build_messages(
     hint = MODE_HINTS.get(mode)
     if hint:
         system_prompt += f"\n\n{hint}"
+    if extra_system:
+        system_prompt += f"\n\n{extra_system}"
 
     messages = [{"role": "system", "content": system_prompt}] + history
     while len(messages) > 2:

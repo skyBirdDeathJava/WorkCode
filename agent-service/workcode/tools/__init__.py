@@ -1,8 +1,8 @@
-"""MVP 工具集：只读工具（allow）+ 写工具（Diff 确认）+ 命令（ask/deny）。"""
+"""MVP 工具集：只读（allow）+ 写（Diff 确认）+ 命令（ask/deny）+ Web（搜索 allow / 抓取 ask）。"""
 
 from __future__ import annotations
 
-from . import cmd, read, write
+from . import cmd, read, web, write
 from .registry import ToolRegistry, ToolDef
 
 
@@ -90,6 +90,37 @@ def build_registry() -> ToolRegistry:
                 "required": ["path", "oldText", "newText"],
             },
             handler=write.edit_file,
+        )
+    )
+
+    r.register(
+        ToolDef(
+            name="web_search",
+            description="在互联网上搜索，返回标题、链接和摘要（如查 API 文档、报错解法）。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索关键字"},
+                    "max_results": {"type": "integer", "description": "返回结果条数，默认 5"},
+                },
+                "required": ["query"],
+            },
+            handler=web.web_search,
+        )
+    )
+
+    r.register(
+        ToolDef(
+            name="web_fetch",
+            description="抓取指定网页并转为纯文本（如读文档、看线上报错页）。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "要抓取的网页 URL"},
+                },
+                "required": ["url"],
+            },
+            handler=web.web_fetch,
         )
     )
 

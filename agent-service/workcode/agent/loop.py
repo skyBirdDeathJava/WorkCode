@@ -117,9 +117,16 @@ class AgentLoop:
 
         self._append_message(session, {"role": "user", "content": context.render_user_message(content, editor_ctx)})
 
+        # git 上下文：每轮加载一次注入系统提示
+        git_ctx = context.load_git_context(self._workspace_root)
+
         for step in range(self.settings.max_steps):
             messages = context.build_messages(
-                session.messages, editor_ctx, self.settings.max_context_tokens, mode=self.mode
+                session.messages,
+                editor_ctx,
+                self.settings.max_context_tokens,
+                mode=self.mode,
+                extra_system=(f"【Git 状态】\n{git_ctx}" if git_ctx else ""),
             )
             # 用量统计（估算 token）
             self._usage["promptTokens"] += context.estimate_total_tokens(messages)

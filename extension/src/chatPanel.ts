@@ -297,7 +297,6 @@ function getWebviewHtml(): string {
   }
   button.primary { background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #fff); }
   button:hover { filter: brightness(1.1); }
-  .hint { font-size: 11px; color: var(--vscode-descriptionForeground, #9d9d9d); text-align: right; }
   .hidden { display: none !important; }
   .history { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .history-head {
@@ -333,7 +332,6 @@ function getWebviewHtml(): string {
       <button id="cancel">停止</button>
       <button id="new">新会话</button>
     </div>
-    <div class="hint">输入 @ 引用文件；选中代码后命令面板执行 “WorkCode: 解释选中代码”</div>
     <div class="toolbar">
       <span id="modeChip" class="chip" title="点击切换权限模式（Manual/Auto/Plan）">Manual</span>
       <span id="modelChip" class="chip" title="点击切换模型">…</span>
