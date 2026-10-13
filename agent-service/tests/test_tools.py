@@ -150,6 +150,18 @@ def test_gateway_command_blacklist() -> None:
     assert g.decide("run_command", {"command": "uptime"}, "/") == "ask"
 
 
+def test_gateway_auto_mode_allows_safe_commands() -> None:
+    g = Gateway()
+    # 非白名单但非危险的命令：Auto 模式自动执行，Manual 需确认
+    assert g.decide("run_command", {"command": "uptime"}, "/", mode="auto") == "allow"
+    assert g.decide("run_command", {"command": "uptime"}, "/", mode="manual") == "ask"
+    assert g.decide("run_command", {"command": "uptime"}, "/", mode="plan") == "ask"
+    # 危险命令任何模式都 deny
+    assert g.decide("run_command", {"command": "sudo rm -rf /"}, "/", mode="auto") == "deny"
+    # 写操作所有模式都 ask
+    assert g.decide("write_file", {"path": "/ws/x.py"}, "/ws", mode="auto") == "ask"
+
+
 @pytest.mark.asyncio
 async def test_run_command_executes() -> None:
     registry = build_registry()

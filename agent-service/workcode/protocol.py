@@ -74,6 +74,14 @@ class ResumeSessionPayload(BaseModel):
     sessionId: str
 
 
+class SetModePayload(BaseModel):
+    mode: str  # manual | auto | plan
+
+
+class SetModelPayload(BaseModel):
+    model: str
+
+
 class SessionItem(BaseModel):
     id: str
     created_at: float
@@ -97,6 +105,8 @@ class SessionResumedPayload(BaseModel):
 class ReadyPayload(BaseModel):
     ok: bool
     message: Optional[str] = None
+    model: Optional[str] = None
+    mode: Optional[str] = None
 
 
 class SessionStartedPayload(BaseModel):
@@ -159,6 +169,8 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "terminal_exec_result": TerminalExecResultPayload,
     "list_sessions": ListSessionsPayload,
     "resume_session": ResumeSessionPayload,
+    "set_mode": SetModePayload,
+    "set_model": SetModelPayload,
     "ready": ReadyPayload,
     "session_started": SessionStartedPayload,
     "session_list": SessionListPayload,

@@ -117,3 +117,12 @@ def test_render_user_message_ignores_missing_ref(tmp_path: Path) -> None:
     ctx = {"workspaceRoot": str(tmp_path), "currentFile": None, "selection": None, "openFiles": []}
     rendered = render_user_message("联系 @nobody 一下", ctx)
     assert "【引用文件】" not in rendered
+
+
+def test_build_messages_mode_hint(tmp_path: Path) -> None:
+    from workcode.agent.context import build_messages
+
+    ctx = {"workspaceRoot": str(tmp_path), "currentFile": None, "selection": None, "openFiles": []}
+    for mode, keyword in (("manual", "Manual"), ("auto", "Auto"), ("plan", "Plan")):
+        messages = build_messages([{"role": "user", "content": "hi"}], ctx, 20000, mode=mode)
+        assert keyword in messages[0]["content"], f"mode={mode} 应有提示"

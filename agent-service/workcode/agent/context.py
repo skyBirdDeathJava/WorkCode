@@ -111,17 +111,31 @@ def render_user_message(content: str, ctx: EditorContext | dict) -> str:
     return "\n\n".join(parts)
 
 
+MODE_HINTS = {
+    "manual": "权限模式：Manual——写文件、执行命令前都会请求你确认。",
+    "auto": "权限模式：Auto——非危险命令自动执行，写文件仍会请求确认。",
+    "plan": (
+        "权限模式：Plan——先给出清晰的修改方案（步骤 + 涉及文件 + 预期改动），"
+        "等用户批准后再动手。在用户明确批准前，不要调用 write_file / edit_file / run_command。"
+    ),
+}
+
+
 def build_messages(
     history: list[dict],
     ctx: EditorContext | dict,
     max_tokens: int,
+    mode: str = "manual",
 ) -> list[dict]:
-    """system + 历史（含 WorkCode.md 项目记忆），token 超限时裁剪最早消息。"""
+    """system + 历史（含 WorkCode.md 项目记忆 + 权限模式），token 超限时裁剪最早消息。"""
     workspace_root = ctx.get("workspaceRoot", "") if isinstance(ctx, dict) else getattr(ctx, "workspaceRoot", "")
     system_prompt = SYSTEM_PROMPT
     memory = load_project_memory(workspace_root)
     if memory:
         system_prompt += f"\n\n【项目记忆（WorkCode.md）】\n{memory}"
+    hint = MODE_HINTS.get(mode)
+    if hint:
+        system_prompt += f"\n\n{hint}"
 
     messages = [{"role": "system", "content": system_prompt}] + history
     while len(messages) > 2:

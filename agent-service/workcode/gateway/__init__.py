@@ -61,7 +61,7 @@ class Gateway:
         self._diff_pending: dict[str, asyncio.Future] = {}
         self._terminal_pending: dict[str, asyncio.Future] = {}
 
-    def decide(self, tool: str, args: dict, workspace_root: str) -> str:
+    def decide(self, tool: str, args: dict, workspace_root: str, mode: str = "manual") -> str:
         if tool in READ_TOOLS:
             return "allow"
         if tool == COMMAND_TOOL:
@@ -70,6 +70,9 @@ class Gateway:
                 return "deny"
             stripped = cmd.strip().lower()
             if any(stripped.startswith(prefix) for prefix in SAFE_COMMAND_PREFIXES):
+                return "allow"
+            # Auto 模式：非危险命令自动执行；Manual/Plan 仍需确认
+            if mode == "auto":
                 return "allow"
             return "ask"
         if tool in WRITE_TOOLS:

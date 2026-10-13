@@ -87,6 +87,7 @@ class AgentLoop:
         settings: Settings,
         terminal: "TerminalSession | None" = None,
         terminal_supported: bool = False,
+        mode: str = "manual",
     ) -> None:
         self.model = model
         self.registry = registry
@@ -95,7 +96,9 @@ class AgentLoop:
         self.settings = settings
         self.terminal = terminal
         self.terminal_supported = terminal_supported
+        self.mode = mode
         self._workspace_root = ""
+        self._usage: dict[str, int] = {"promptTokens": 0, "completionTokens": 0}
 
     async def run(
         self,
@@ -115,8 +118,13 @@ class AgentLoop:
         self._append_message(session, {"role": "user", "content": context.render_user_message(content, editor_ctx)})
 
         for step in range(self.settings.max_steps):
-            messages = context.build_messages(session.messages, editor_ctx, self.settings.max_context_tokens)
+            messages = context.build_messages(
+                session.messages, editor_ctx, self.settings.max_context_tokens, mode=self.mode
+            )
+            # 用量统计（估算 token）
+            self._usage["promptTokens"] += context.estimate_total_tokens(messages)
             async def on_delta(delta: str) -> None:
+                self._usage["completionTokens"] += context.estimate_tokens(delta)
                 await emit("text_delta", {"delta": delta})
 
             try:
@@ -139,12 +147,13 @@ class AgentLoop:
                 # 先把 assistant 的 tool_calls 消息写进历史，再执行工具，
                 # 否则模型 API 会因缺少该消息而 400（OpenAI 兼容协议要求）
                 self._append_assistant_tool_call(session, result)
+                self._usage["completionTokens"] += context.estimate_tokens(result.text)
                 await self._handle_tool_calls(result.tool_calls, session, editor_ctx, emit)
                 continue
 
             if result.text:
                 self._append_message(session, {"role": "assistant", "content": result.text})
-                await emit("done", {"usage": {}})
+                await emit("done", {"usage": dict(self._usage)})
                 return
 
             # 既无文本也无工具调用：异常情况
@@ -214,7 +223,7 @@ class AgentLoop:
 
             await emit("tool_call", {"requestId": call_id, "tool": name, "arguments": args})
 
-            decision = self.gateway.decide(name, args, workspace_root)
+            decision = self.gateway.decide(name, args, workspace_root, mode=self.mode)
 
             if decision == "deny":
                 ok, output = False, f"权限被拒绝：不允许执行 {name}"

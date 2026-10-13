@@ -10,6 +10,8 @@ import { TerminalRunner } from './terminalRunner';
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private fileCache: string[] | null = null;
+  private currentMode = 'manual';
+  private currentModel = vscode.workspace.getConfiguration('workcode').get<string>('model', 'deepseek/deepseek-chat');
 
   constructor(
     private readonly client: ServiceClient,
@@ -47,6 +49,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case 'queryFiles':
           void this.sendFileList(String(msg.query ?? ''));
+          break;
+        case 'toggleMode':
+          this.toggleMode();
+          break;
+        case 'pickModel':
+          void this.pickModel();
           break;
         case 'ready':
           this.pushContext();
@@ -107,6 +115,39 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 把当前文件 + 选区行号推给 Webview 顶部上下文栏。 */
   pushContext(): void {
     void this.view?.webview.postMessage({ type: 'context', payload: buildContextSummary() });
+  }
+
+  /** 权限模式循环切换：Manual → Auto → Plan → Manual。服务端回 ready 更新 chips。 */
+  private toggleMode(): void {
+    const next =
+      this.currentMode === 'manual' ? 'auto' : this.currentMode === 'auto' ? 'plan' : 'manual';
+    this.currentMode = next;
+    this.client.setMode(next);
+  }
+
+  /** 选择模型（LiteLLM 标识），写入配置并通知服务端。 */
+  private async pickModel(): Promise<void> {
+    const presets = ['deepseek/deepseek-chat', 'deepseek/deepseek-reasoner'];
+    const custom = { label: '$(pencil) 输入自定义模型标识…', description: 'LiteLLM 格式，如 anthropic/claude-sonnet-4' };
+    const picked = await vscode.window.showQuickPick(
+      [...presets.map((m) => ({ label: m, description: 'LiteLLM 模型标识' })), custom],
+      { placeHolder: '选择模型' }
+    );
+    let model: string | undefined;
+    if (picked === custom) {
+      model = await vscode.window.showInputBox({
+        prompt: '输入模型标识（LiteLLM 格式）',
+        value: this.currentModel || 'deepseek/deepseek-chat',
+        ignoreFocusOut: true,
+      });
+    } else if (picked) {
+      model = picked.label;
+    }
+    if (model && model.trim()) {
+      this.currentModel = model.trim();
+      await vscode.workspace.getConfiguration('workcode').update('model', model.trim(), true);
+      this.client.setModel(model.trim());
+    }
   }
 
   /** 按 @ 后面的关键字返回工作区文件列表，推给 Webview 浮层。 */
@@ -173,8 +214,15 @@ function getWebviewHtml(): string {
     padding: 6px 10px; font-size: 11px;
     color: var(--vscode-descriptionForeground, #9d9d9d);
     border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, #3c3c3c);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: flex; align-items: center; gap: 6px;
   }
+  .chip {
+    font-size: 10px; padding: 1px 7px; border-radius: 9px; cursor: pointer;
+    background: #3a3a3a55; border: 1px solid var(--vscode-sideBarSectionHeader-border, #3c3c3c);
+    white-space: nowrap;
+  }
+  .chip:hover { border-color: var(--vscode-focusBorder, #3794ff); }
+  #statusText { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #context {
     padding: 4px 10px; font-size: 11px; font-family: "SF Mono", Menlo, monospace;
     color: var(--vscode-descriptionForeground, #9d9d9d);
@@ -267,7 +315,11 @@ function getWebviewHtml(): string {
 </style>
 </head>
 <body>
-  <div id="status">WorkCode · 启动中…</div>
+  <div id="status">
+    <span id="modeChip" class="chip" title="点击切换权限模式">Manual</span>
+    <span id="modelChip" class="chip" title="点击切换模型">…</span>
+    <span id="statusText">启动中…</span>
+  </div>
   <div id="context">…</div>
   <div id="messages"></div>
   <div id="history" class="history hidden">
@@ -303,7 +355,14 @@ function getWebviewHtml(): string {
   const tools = {};
 
   function setStatus(text) {
-    document.getElementById('status').textContent = 'WorkCode · ' + text;
+    document.getElementById('statusText').textContent = text;
+  }
+  function renderState(model, mode) {
+    const m = mode === 'plan' ? 'Plan' : mode === 'auto' ? 'Auto' : 'Manual';
+    document.getElementById('modeChip').textContent = m;
+    document.getElementById('modelChip').textContent = model
+      ? String(model).replace(/^deepseek\\//, '')
+      : '…';
   }
   function renderContext(payload) {
     const el = document.getElementById('context');
@@ -675,6 +734,7 @@ function getWebviewHtml(): string {
     switch (evt.type) {
       case 'ready':
         setStatus(evt.payload.message || '就绪');
+        renderState(evt.payload.model, evt.payload.mode);
         break;
       case 'session_started':
         setStatus('会话 ' + String(evt.payload.sessionId).slice(0, 8));
@@ -714,15 +774,20 @@ function getWebviewHtml(): string {
       case 'error':
         addBubble('error', '⚠ ' + evt.payload.message);
         break;
-      case 'done':
-        setStatus('✓ 完成');
+      case 'done': {
+        const usage = evt.payload.usage || {};
+        const total = (usage.promptTokens || 0) + (usage.completionTokens || 0);
+        setStatus(total ? \`✓ 完成 · 本轮 ~\${total} tokens\` : '✓ 完成');
         assistant = null;
         assistantText = '';
         break;
+      }
     }
   });
 
   document.getElementById('send').addEventListener('click', send);
+  document.getElementById('modeChip').addEventListener('click', () => vscode.postMessage({ type: 'toggleMode' }));
+  document.getElementById('modelChip').addEventListener('click', () => vscode.postMessage({ type: 'pickModel' }));
   document.getElementById('historyBtn').addEventListener('click', showHistory);
   document.getElementById('historyClose').addEventListener('click', closeHistory);
   document.getElementById('cancel').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));

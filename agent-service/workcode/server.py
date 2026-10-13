@@ -56,6 +56,7 @@ def make_app(settings: Settings) -> FastAPI:
         terminal = TerminalSession()
         api_key: str = settings.api_key
         model_name: str = settings.model
+        mode = "manual"  # manual | auto | plan
         terminal_supported = False  # 插件连接时声明，决定 run_command 是否桥接到 VS Code 终端
 
         def session_id() -> Optional[str]:
@@ -68,7 +69,7 @@ def make_app(settings: Settings) -> FastAPI:
             model = MockModel() if settings.mock else DeepSeekModel(api_key=api_key, model=model_name)
             return AgentLoop(
                 model, registry, gateway, store, settings,
-                terminal=terminal, terminal_supported=terminal_supported,
+                terminal=terminal, terminal_supported=terminal_supported, mode=mode,
             )
 
         try:
@@ -90,7 +91,27 @@ def make_app(settings: Settings) -> FastAPI:
                         model_name = payload["model"]
                     if payload.get("terminalSupport"):
                         terminal_supported = True
-                    await emit("ready", {"ok": True, "message": f"WorkCode 服务就绪（model={model_name}, mock={settings.mock}）"})
+                    await emit(
+                        "ready",
+                        {
+                            "ok": True,
+                            "message": f"WorkCode 服务就绪（model={model_name}, mock={settings.mock}）",
+                            "model": model_name,
+                            "mode": mode,
+                        },
+                    )
+
+                elif kind == "set_mode":
+                    new_mode = payload.get("mode", "")
+                    if new_mode in ("manual", "auto", "plan"):
+                        mode = new_mode
+                        await emit("ready", {"ok": True, "message": f"权限模式已切换：{mode}", "model": model_name, "mode": mode})
+
+                elif kind == "set_model":
+                    new_model = payload.get("model", "").strip()
+                    if new_model:
+                        model_name = new_model
+                        await emit("ready", {"ok": True, "message": f"模型已切换：{model_name}", "model": model_name, "mode": mode})
 
                 elif kind == "new_session":
                     if task is not None and not task.done():
