@@ -9,6 +9,7 @@ import { TerminalRunner } from './terminalRunner';
 /** 侧边栏聊天面板：WebviewViewProvider，负责 UI 与服务之间的消息路由。 */
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
+  private fileCache: string[] | null = null;
 
   constructor(
     private readonly client: ServiceClient,
@@ -44,8 +45,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case 'resumeSession':
           void this.client.resumeSession(String(msg.sessionId));
           break;
-        case 'pickFile':
-          void this.pickFileForReference();
+        case 'queryFiles':
+          void this.sendFileList(String(msg.query ?? ''));
           break;
         case 'ready':
           this.pushContext();
@@ -108,20 +109,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     void this.view?.webview.postMessage({ type: 'context', payload: buildContextSummary() });
   }
 
-  /** 选择工作区文件，把路径作为 @引用 插入聊天输入框。 */
-  private async pickFileForReference(): Promise<void> {
-    const files = await getWorkspaceFiles();
-    if (files.length === 0) {
-      void vscode.window.showInformationMessage('工作区里没有可引用的文件。');
-      return;
+  /** 按 @ 后面的关键字返回工作区文件列表，推给 Webview 浮层。 */
+  private async sendFileList(query: string): Promise<void> {
+    if (!this.fileCache) {
+      this.fileCache = await getWorkspaceFiles();
     }
-    const picked = await vscode.window.showQuickPick(
-      files.map((f) => ({ label: path.basename(f), description: f })),
-      { placeHolder: '选择要 @引用的文件' }
-    );
-    if (picked) {
-      void this.view?.webview.postMessage({ type: 'insertFile', path: picked.description });
-    }
+    const q = query.toLowerCase();
+    const files = q
+      ? this.fileCache.filter((f) => path.basename(f).toLowerCase().includes(q))
+      : this.fileCache;
+    void this.view?.webview.postMessage({ type: 'fileList', files: files.slice(0, 20) });
   }
 
   /** 拉取历史会话列表并推给 Webview 渲染。 */
@@ -224,7 +221,16 @@ function getWebviewHtml(): string {
   }
   .perm-head { font-weight: 600; margin-bottom: 6px; }
   .perm-detail { font-size: 11px; font-family: monospace; color: var(--vscode-descriptionForeground, #9d9d9d); margin-bottom: 8px; white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto; }
-  #composer { border-top: 1px solid var(--vscode-sideBarSectionHeader-border, #3c3c3c); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  #composer { position: relative; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, #3c3c3c); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .at-popup {
+    position: absolute; bottom: 100%; left: 0; right: 0;
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-sideBarSectionHeader-border, #3c3c3c);
+    border-radius: 6px; max-height: 180px; overflow-y: auto; z-index: 20;
+  }
+  .at-item { padding: 6px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .at-item.active { background: var(--vscode-list-activeSelectionBackground, #0e639c); color: #fff; }
+  .at-item.muted { color: var(--vscode-descriptionForeground, #9d9d9d); cursor: default; }
   textarea {
     width: 100%; resize: none;
     background: var(--vscode-input-background, #1e1e1e);
@@ -269,15 +275,15 @@ function getWebviewHtml(): string {
     <div id="historyList" class="history-list"></div>
   </div>
   <div id="composer">
-    <textarea id="input" placeholder="输入问题，Enter 发送 / Shift+Enter 换行"></textarea>
+    <div id="atPopup" class="at-popup hidden"></div>
+    <textarea id="input" placeholder="输入问题，@ 引用文件，Enter 发送 / Shift+Enter 换行"></textarea>
     <div class="btns">
       <button id="send" class="primary">发送</button>
-      <button id="atBtn" title="引用文件 (@)">@</button>
       <button id="historyBtn" title="历史会话">🕘</button>
       <button id="cancel">停止</button>
       <button id="new">新会话</button>
     </div>
-    <div class="hint">选中代码后，命令面板执行 “WorkCode: 解释选中代码”</div>
+    <div class="hint">输入 @ 引用文件；选中代码后命令面板执行 “WorkCode: 解释选中代码”</div>
   </div>
 <script>
   const vscode = acquireVsCodeApi();
@@ -520,13 +526,72 @@ function getWebviewHtml(): string {
     vscode.postMessage({ type: 'send', content });
   }
 
-  function insertFileRef(path) {
+  // ---------- @ 引用文件（输入框触发） ----------
+  const atPopup = document.getElementById('atPopup');
+  let atState = null; // { start, token, items, index }
+  let atDebounce = null;
+
+  function updateAtPopup() {
     const input = document.getElementById('input');
-    const cursor = input.selectionStart ?? input.value.length;
-    const at = cursor > 0 && input.value[cursor - 1] !== '@' ? '@' : '';
-    input.value = input.value.slice(0, cursor) + at + path + ' ' + input.value.slice(cursor);
+    const pos = input.selectionStart ?? input.value.length;
+    const before = input.value.slice(0, pos);
+    const m = /@([^\s]*)$/.exec(before);
+    if (!m) {
+      hideAtPopup();
+      return;
+    }
+    const start = pos - m[0].length; // @ 的位置
+    atState = { start, token: m[1], items: [], index: 0 };
+    clearTimeout(atDebounce);
+    atDebounce = setTimeout(() => {
+      vscode.postMessage({ type: 'queryFiles', query: atState ? atState.token : '' });
+    }, 150);
+  }
+
+  function renderAtList(files) {
+    if (!atState) return;
+    atState.items = files || [];
+    atState.index = 0;
+    atPopup.innerHTML = '';
+    if (!atState.items.length) {
+      atPopup.innerHTML = '<div class="at-item muted">无匹配文件</div>';
+    } else {
+      atState.items.forEach((f, i) => {
+        const it = document.createElement('div');
+        it.className = 'at-item' + (i === 0 ? ' active' : '');
+        it.textContent = f;
+        it.addEventListener('click', () => selectAt(i));
+        atPopup.appendChild(it);
+      });
+    }
+    atPopup.classList.remove('hidden');
+  }
+
+  function highlightAt() {
+    const items = atPopup.children;
+    for (let i = 0; i < items.length; i++) {
+      items[i].className = 'at-item' + (i === atState.index ? ' active' : '');
+    }
+  }
+
+  function selectAt(i) {
+    if (!atState || !atState.items.length) return;
+    const input = document.getElementById('input');
+    const end = atState.start + 1 + atState.token.length; // @ + token 之后
+    const path = atState.items[i];
+    input.value =
+      input.value.slice(0, atState.start) + '@' + path + ' ' + input.value.slice(end);
     input.focus();
-    input.selectionStart = input.selectionEnd = cursor + at.length + path.length;
+    const caret = atState.start + 1 + path.length;
+    input.selectionStart = input.selectionEnd = caret;
+    hideAtPopup();
+  }
+
+  function hideAtPopup() {
+    atState = null;
+    clearTimeout(atDebounce);
+    atPopup.classList.add('hidden');
+    atPopup.innerHTML = '';
   }
   function showHistory() {
     console.log('[workcode] showHistory 被点击');
@@ -597,8 +662,8 @@ function getWebviewHtml(): string {
       renderSessionList(msg.sessions || []);
       return;
     }
-    if (msg.type === 'insertFile') {
-      insertFileRef(msg.path || '');
+    if (msg.type === 'fileList') {
+      renderAtList(msg.files || []);
       return;
     }
     if (msg.type === 'context') {
@@ -658,7 +723,6 @@ function getWebviewHtml(): string {
   });
 
   document.getElementById('send').addEventListener('click', send);
-  document.getElementById('atBtn').addEventListener('click', () => vscode.postMessage({ type: 'pickFile' }));
   document.getElementById('historyBtn').addEventListener('click', showHistory);
   document.getElementById('historyClose').addEventListener('click', closeHistory);
   document.getElementById('cancel').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
@@ -668,7 +732,15 @@ function getWebviewHtml(): string {
     assistantText = '';
     vscode.postMessage({ type: 'newSession' });
   });
+  // 输入框：@ 触发文件引用浮层
+  input.addEventListener('input', updateAtPopup);
   input.addEventListener('keydown', (e) => {
+    if (atState && atState.items.length) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); atState.index = (atState.index + 1) % atState.items.length; highlightAt(); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); atState.index = (atState.index - 1 + atState.items.length) % atState.items.length; highlightAt(); return; }
+      if (e.key === 'Enter') { e.preventDefault(); selectAt(atState.index); return; }
+      if (e.key === 'Escape') { e.preventDefault(); hideAtPopup(); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
