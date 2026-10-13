@@ -84,6 +84,11 @@ curl http://127.0.0.1:4877/healthz     # 健康检查
 - [x] M5 运行命令 + 危险命令拦截（run_command：危险 deny / 安全白名单 allow / 其他弹窗确认）
 - [ ] M6 MVP 完成（真实任务调试 + 演示）
 
+会话持久化（对齐 Claude Code 的 transcript 机制）：
+- 每个会话一个 **JSONL 文件**（`~/.workcode/sessions/<id>.jsonl`），逐条追加，崩溃/中断只丢当前未写完的消息
+- **恢复历史会话**：命令面板 →「WorkCode: 恢复历史会话」，选择器列出各会话（首条消息 + 时间），选中即恢复，历史消息在聊天面板重新渲染
+- **自动压缩上下文**：历史超限时用模型把较早轮次压缩成摘要，摘要作为 `summary` 行落盘；长会话不失忆
+
 安全与交互：
 - 只读工具默认 `allow`；路径在工作区外直接 `deny`。
 - 写文件（`write_file` / `edit_file`）：Agent 提议修改后**不直接落盘**，先在 VS Code

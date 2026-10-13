@@ -21,8 +21,13 @@ from workcode.tools import build_registry
 pytestmark = pytest.mark.asyncio
 
 
-def test_append_assistant_tool_call_format() -> None:
-    history: list[dict] = []
+def test_append_assistant_tool_call_format(tmp_path: Path) -> None:
+    store = SessionStore(str(tmp_path / "sessions"))
+    session = store.create_session()
+    loop = AgentLoop(
+        MockModel(), build_registry(), Gateway(), store,
+        Settings(session_dir=str(tmp_path / "sessions")),
+    )
     result = StepResult(
         text="",
         tool_calls=[
@@ -30,8 +35,8 @@ def test_append_assistant_tool_call_format() -> None:
             {"id": "c2", "name": "write_file", "arguments": '{"path": "/a.py", "content": "hi"}'},
         ],
     )
-    AgentLoop._append_assistant_tool_call(history, result)
-    msg = history[0]
+    loop._append_assistant_tool_call(session, result)
+    msg = session.messages[0]
     assert msg["role"] == "assistant"
     assert msg["tool_calls"][0]["id"] == "c1"
     assert msg["tool_calls"][0]["type"] == "function"
@@ -85,3 +90,40 @@ async def test_loop_tool_message_ordering(tmp_path: Path) -> None:
     idx_tool = next(i for i, m in enumerate(msgs) if m["role"] == "tool")
     assert idx_assistant_tc < idx_tool, "assistant tool_calls 消息必须排在 tool 结果之前"
     assert msgs[-1]["role"] == "assistant" and msgs[-1]["content"]
+
+
+async def test_loop_auto_compact(tmp_path: Path) -> None:
+    """历史超限时自动压缩，摘要写入会话。"""
+    sessions = str(tmp_path / "sessions")
+    store = SessionStore(sessions)
+    session = store.create_session()
+    # 预置超长历史
+    for i in range(10):
+        session.messages.append({"role": "user", "content": f"问题{i} " + "字" * 2000})
+        session.messages.append({"role": "assistant", "content": f"回答{i} " + "字" * 2000})
+
+    loop = AgentLoop(
+        MockModel(),
+        build_registry(),
+        Gateway(),
+        store,
+        Settings(session_dir=sessions, max_context_tokens=3000),
+    )
+    editor = {"workspaceRoot": str(tmp_path), "currentFile": None, "selection": None, "openFiles": []}
+    events: list[str] = []
+
+    async def emit(kind: str, payload: dict) -> None:
+        events.append(kind)
+
+    await loop.run(session, "你好", editor, emit)
+
+    # 压缩后应有摘要消息
+    assert any(
+        m.get("content", "").startswith("（历史摘要）") for m in session.messages
+    ), "应触发自动压缩并写入摘要"
+    # 摘要应落盘（JSONL 有 summary 行）
+    path = store._path(session.id)
+    assert path.exists()
+    assert any(
+        '"type": "summary"' in line for line in path.read_text(encoding="utf-8").splitlines()
+    ), "摘要应落盘 JSONL"

@@ -108,7 +108,11 @@ class AgentLoop:
             self._workspace_root = editor_ctx.get("workspaceRoot", "")
         else:
             self._workspace_root = getattr(editor_ctx, "workspaceRoot", "")
-        session.messages.append({"role": "user", "content": context.render_user_message(content, editor_ctx)})
+
+        # 历史超限 → 自动压缩（摘要落盘），长会话不失忆
+        await self._maybe_compact(session)
+
+        self._append_message(session, {"role": "user", "content": context.render_user_message(content, editor_ctx)})
 
         for step in range(self.settings.max_steps):
             messages = context.build_messages(session.messages, editor_ctx, self.settings.max_context_tokens)
@@ -134,14 +138,13 @@ class AgentLoop:
             if result.tool_calls:
                 # 先把 assistant 的 tool_calls 消息写进历史，再执行工具，
                 # 否则模型 API 会因缺少该消息而 400（OpenAI 兼容协议要求）
-                self._append_assistant_tool_call(session.messages, result)
-                await self._handle_tool_calls(result.tool_calls, session.messages, editor_ctx, emit)
+                self._append_assistant_tool_call(session, result)
+                await self._handle_tool_calls(result.tool_calls, session, editor_ctx, emit)
                 continue
 
             if result.text:
-                session.messages.append({"role": "assistant", "content": result.text})
+                self._append_message(session, {"role": "assistant", "content": result.text})
                 await emit("done", {"usage": {}})
-                self.store.save(session)
                 return
 
             # 既无文本也无工具调用：异常情况
@@ -157,10 +160,30 @@ class AgentLoop:
                 )
             },
         )
-        self.store.save(session)
 
-    @staticmethod
-    def _append_assistant_tool_call(history: list[dict], result: StepResult) -> None:
+    def _append_message(self, session: Session, message: dict) -> None:
+        """追加一条消息：写进会话内存 + 逐条落盘 JSONL。"""
+        session.messages.append(message)
+        self.store.append(session.id, message)
+
+    async def _maybe_compact(self, session: Session) -> None:
+        """历史超限时压缩：保留最近轮次，更早的用模型摘要，摘要落盘。静默进行。"""
+        threshold = int(self.settings.max_context_tokens * 0.8)
+        if context.estimate_total_tokens(session.messages) <= threshold:
+            return
+        try:
+            new_messages, summary = await context.compact(
+                session.messages, self.model, threshold
+            )
+        except Exception as e:  # noqa: BLE001 — 压缩失败不阻塞对话
+            logger.exception("compact failed: %s", e)
+            return
+        if new_messages is not None:
+            session.messages = new_messages
+            if summary:
+                self.store.append_summary(session.id, summary)
+
+    def _append_assistant_tool_call(self, session: Session, result: StepResult) -> None:
         tool_calls = [
             {
                 "id": c.get("id", f"call_{i}"),
@@ -169,15 +192,15 @@ class AgentLoop:
             }
             for i, c in enumerate(result.tool_calls)
         ]
-        history.append({"role": "assistant", "content": result.text or "", "tool_calls": tool_calls})
+        self._append_message(session, {"role": "assistant", "content": result.text or "", "tool_calls": tool_calls})
 
     async def _handle_tool_calls(
         self,
         calls: list[dict[str, Any]],
-        history: list[dict],
+        session: Session,
         editor_ctx: Any,
         emit: Emit,
-    ) -> list[dict]:
+    ) -> None:
         workspace_root = self._workspace_root
 
         for call in calls:
@@ -207,17 +230,16 @@ class AgentLoop:
                 ok, output = await self._execute(name, args, emit)
                 await emit("tool_result", _result_payload(call_id, name, ok, output, args))
 
-            # 把工具结果作为 tool 角色消息写回历史，供模型继续推理
+            # 把工具结果作为 tool 角色消息写回历史（落盘），供模型继续推理
             result_text = output if ok else f"[工具失败] {output}"
-            history.append(
+            self._append_message(
+                session,
                 {
                     "role": "tool",
                     "tool_call_id": call_id,
                     "content": result_text[:MAX_TOOL_OUTPUT_CHARS],
-                }
+                },
             )
-
-        return history
 
     async def _handle_permission_ask(self, name: str, args: dict[str, Any], emit: Emit) -> tuple[bool, str]:
         """通用权限弹窗（非写工具，如 M5 的 run_command）。"""

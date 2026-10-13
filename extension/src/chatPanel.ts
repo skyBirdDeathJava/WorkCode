@@ -37,6 +37,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case 'applyDiff':
           this.client.respondApplyDiff(String(msg.requestId), Boolean(msg.accepted));
           break;
+        case 'listSessions':
+          void this.sendSessionList();
+          break;
+        case 'resumeSession':
+          void this.client.resumeSession(String(msg.sessionId));
+          break;
         case 'ready':
           this.pushContext();
           break;
@@ -48,6 +54,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         void this.diffs.showDiff(evt.payload as unknown as DiffPreviewPayload);
       } else if (evt.type === 'terminal_exec') {
         void this.terminalRunner.run(evt.payload as unknown as TerminalExecPayload);
+      } else if (evt.type === 'session_resumed') {
+        void this.view?.webview.postMessage({
+          type: 'resume',
+          sessionId: String(evt.payload.sessionId),
+          messages: Array.isArray(evt.payload.messages) ? evt.payload.messages : [],
+        });
       }
       this.postEvent(evt);
     });
@@ -90,6 +102,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 把当前文件 + 选区行号推给 Webview 顶部上下文栏。 */
   pushContext(): void {
     void this.view?.webview.postMessage({ type: 'context', payload: buildContextSummary() });
+  }
+
+  /** 拉取历史会话列表并推给 Webview 渲染。 */
+  private async sendSessionList(): Promise<void> {
+    console.log('[workcode] 宿主收到 listSessions，开始拉取');
+    try {
+      const sessions = await this.client.listSessions();
+      console.log('[workcode] 拉到会话数:', sessions?.length ?? 0);
+      void this.view?.webview.postMessage({
+        type: 'sessionList',
+        sessions: sessions ?? [],
+      });
+    } catch (err) {
+      console.error('[workcode] 拉取会话失败:', err);
+      void this.view?.webview.postMessage({ type: 'sessionList', sessions: [] });
+    }
   }
 
   private postEvent(evt: ServerEvent): void {
@@ -182,16 +210,37 @@ function getWebviewHtml(): string {
   button.primary { background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #fff); }
   button:hover { filter: brightness(1.1); }
   .hint { font-size: 11px; color: var(--vscode-descriptionForeground, #9d9d9d); text-align: right; }
+  .hidden { display: none !important; }
+  .history { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .history-head {
+    padding: 8px 10px; font-weight: 600;
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, #3c3c3c);
+  }
+  .history-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .history-item {
+    background: var(--vscode-editorWidget-background, #252526);
+    border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer;
+  }
+  .history-item:hover { background: #3a3a3a; }
+  .history-item .preview { font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  .history-item .time { font-size: 11px; color: var(--vscode-descriptionForeground, #9d9d9d); margin-top: 4px; }
+  .history-item.muted { cursor: default; color: var(--vscode-descriptionForeground, #9d9d9d); }
 </style>
 </head>
 <body>
   <div id="status">WorkCode · 启动中…</div>
   <div id="context">…</div>
   <div id="messages"></div>
+  <div id="history" class="history hidden">
+    <div class="history-head">历史会话 <button id="historyClose">×</button></div>
+    <div id="historyList" class="history-list"></div>
+  </div>
   <div id="composer">
     <textarea id="input" placeholder="输入问题，Enter 发送 / Shift+Enter 换行"></textarea>
     <div class="btns">
       <button id="send" class="primary">发送</button>
+      <button id="historyBtn" title="历史会话">🕘</button>
       <button id="cancel">停止</button>
       <button id="new">新会话</button>
     </div>
@@ -438,9 +487,75 @@ function getWebviewHtml(): string {
     vscode.postMessage({ type: 'send', content });
   }
 
+  function showHistory() {
+    console.log('[workcode] showHistory 被点击');
+    messages.classList.add('hidden');
+    document.getElementById('composer').classList.add('hidden');
+    document.getElementById('history').classList.remove('hidden');
+    document.getElementById('historyList').innerHTML =
+      '<div class="history-item muted">加载中…</div>';
+    vscode.postMessage({ type: 'listSessions' });
+  }
+  function closeHistory() {
+    document.getElementById('history').classList.add('hidden');
+    messages.classList.remove('hidden');
+    document.getElementById('composer').classList.remove('hidden');
+  }
+  function renderSessionList(sessions) {
+    console.log('[workcode] 收到会话列表，数量', sessions ? sessions.length : 0);
+    const list = document.getElementById('historyList');
+    if (!sessions || sessions.length === 0) {
+      list.innerHTML = '<div class="history-item muted">暂无历史会话</div>';
+      return;
+    }
+    list.innerHTML = '';
+    for (const s of sessions) {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      const p = document.createElement('div');
+      p.className = 'preview';
+      p.textContent = s.preview;
+      const t = document.createElement('div');
+      t.className = 'time';
+      t.textContent = new Date(s.created_at * 1000).toLocaleString();
+      item.appendChild(p);
+      item.appendChild(t);
+      item.addEventListener('click', () => {
+        vscode.postMessage({ type: 'resumeSession', sessionId: s.id });
+      });
+      list.appendChild(item);
+    }
+  }
+  function renderResumed(data) {
+    messages.innerHTML = '';
+    assistant = null;
+    assistantText = '';
+    for (const m of data.messages || []) {
+      if (m.role === 'user' && m.content) {
+        addBubble('user', String(m.content));
+      } else if (m.role === 'assistant' && m.content) {
+        const b = addBubble('assistant', '');
+        b.classList.add('md');
+        b.innerHTML = mdToHtml(String(m.content));
+      } else if (m.role === 'system' && m.content && String(m.content).startsWith('（历史摘要）')) {
+        addBubble('assistant', '📌 ' + String(m.content));
+      }
+      // tool 消息跳过（内部细节）
+    }
+    setStatus('会话 ' + String(data.sessionId).slice(0, 8));
+  }
   window.addEventListener('message', (e) => {
     const msg = e.data;
     if (!msg) return;
+    if (msg.type === 'resume') {
+      renderResumed(msg);
+      closeHistory();
+      return;
+    }
+    if (msg.type === 'sessionList') {
+      renderSessionList(msg.sessions || []);
+      return;
+    }
     if (msg.type === 'context') {
       renderContext(msg.payload);
       return;
@@ -498,6 +613,8 @@ function getWebviewHtml(): string {
   });
 
   document.getElementById('send').addEventListener('click', send);
+  document.getElementById('historyBtn').addEventListener('click', showHistory);
+  document.getElementById('historyClose').addEventListener('click', closeHistory);
   document.getElementById('cancel').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
   document.getElementById('new').addEventListener('click', () => {
     messages.innerHTML = '';

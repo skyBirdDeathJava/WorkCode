@@ -48,6 +48,10 @@
         "title": "WorkCode: 新建会话"
       },
       {
+        "command": "workcode.resume",
+        "title": "WorkCode: 恢复历史会话"
+      },
+      {
         "command": "workcode.setApiKey",
         "title": "WorkCode: 设置 API Key"
       }

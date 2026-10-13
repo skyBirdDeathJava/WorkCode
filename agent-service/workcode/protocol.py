@@ -65,6 +65,32 @@ class TerminalExecResultPayload(BaseModel):
     stillRunning: Optional[bool] = None
 
 
+class ListSessionsPayload(BaseModel):
+    requestId: Optional[str] = None
+
+
+class ResumeSessionPayload(BaseModel):
+    requestId: Optional[str] = None
+    sessionId: str
+
+
+class SessionItem(BaseModel):
+    id: str
+    created_at: float
+    preview: str
+
+
+class SessionListPayload(BaseModel):
+    requestId: Optional[str] = None
+    sessions: list[SessionItem] = Field(default_factory=list)
+
+
+class SessionResumedPayload(BaseModel):
+    requestId: Optional[str] = None
+    sessionId: str
+    messages: list[dict] = Field(default_factory=list)
+
+
 # ---------- 服务 → 插件 payload ----------
 
 
@@ -131,8 +157,12 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "permission_response": PermissionResponsePayload,
     "apply_diff": ApplyDiffPayload,
     "terminal_exec_result": TerminalExecResultPayload,
+    "list_sessions": ListSessionsPayload,
+    "resume_session": ResumeSessionPayload,
     "ready": ReadyPayload,
     "session_started": SessionStartedPayload,
+    "session_list": SessionListPayload,
+    "session_resumed": SessionResumedPayload,
     "text_delta": TextDeltaPayload,
     "tool_call": ToolCallPayload,
     "tool_result": ToolResultPayload,

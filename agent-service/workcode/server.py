@@ -118,6 +118,27 @@ def make_app(settings: Settings) -> FastAPI:
                 elif kind == "terminal_exec_result":
                     gateway.resolve_terminal(payload.get("requestId", ""), payload)
 
+                elif kind == "list_sessions":
+                    await emit(
+                        "session_list",
+                        {"requestId": payload.get("requestId", ""), "sessions": store.list_sessions(20)},
+                    )
+
+                elif kind == "resume_session":
+                    loaded = store.load(payload.get("sessionId", ""))
+                    if loaded is not None:
+                        session = loaded
+                        await emit(
+                            "session_resumed",
+                            {
+                                "requestId": payload.get("requestId", ""),
+                                "sessionId": session.id,
+                                "messages": session.messages,
+                            },
+                        )
+                    else:
+                        await emit("error", {"message": f"会话不存在：{payload.get('sessionId', '')}"})
+
                 elif kind == "cancel":
                     if task is not None and not task.done():
                         task.cancel()

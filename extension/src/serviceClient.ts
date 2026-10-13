@@ -21,9 +21,11 @@ export class ServiceClient extends vscode.Disposable {
   private ws: WebSocket | null = null;
   private child: child_process.ChildProcess | null = null;
   private started = false;
+  private connecting = false;
   private reconnecting = false;
   private readonly port: number;
   private readonly eventHandlers: Array<(e: ServerEvent) => void> = [];
+  private readonly pendingRequests = new Map<string, (payload: Record<string, unknown>) => void>();
 
   constructor(private readonly ctx: vscode.ExtensionContext) {
     super(() => this.dispose());
@@ -36,13 +38,23 @@ export class ServiceClient extends vscode.Disposable {
     return `ws://127.0.0.1:${this.port}/ws`;
   }
 
-  /** 确保服务在线：先探活，失败则拉起 Python 进程并等待连接。 */
+  /** 确保服务在线：可重试。已连接直接返回；否则探活/拉起进程并等待。 */
   async ensureRunning(): Promise<void> {
-    if (this.started) return;
-    this.started = true;
-    if (await this.tryConnect()) return;
-    await this.spawnService();
-    await this.waitForConnect(8_000);
+    if (this.ws && this.ws.readyState === WS_OPEN) return;
+    if (this.connecting) return;
+    this.connecting = true;
+    try {
+      // 服务可能已在运行（上次启动慢、或别的窗口拉起了）
+      if (await this.tryConnect()) return;
+      if (!this.started) {
+        this.started = true;
+        await this.spawnService();
+      }
+      // 首次冷启动可能较慢（导入 litellm 等），给足时间
+      await this.waitForConnect(20_000);
+    } finally {
+      this.connecting = false;
+    }
   }
 
   sendChat(content: string, editorContext: EditorContext): void {
@@ -55,6 +67,33 @@ export class ServiceClient extends vscode.Disposable {
 
   newSession(): void {
     this.send('new_session', {});
+  }
+
+  /** 请求-响应：带 requestId 的往返，服务端在响应里回显 requestId。请求前先确保连接。 */
+  async request(type: string, payload: Record<string, unknown>): Promise<Record<string, unknown> | undefined> {
+    try {
+      await this.ensureRunning();
+    } catch {
+      // 连不上时仍走 send（会提示），让请求自行超时
+    }
+    return new Promise((resolve) => {
+      const requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      this.pendingRequests.set(requestId, resolve);
+      this.send(type, { ...payload, requestId });
+      setTimeout(() => {
+        if (this.pendingRequests.delete(requestId)) resolve(undefined);
+      }, 10_000);
+    });
+  }
+
+  async listSessions(): Promise<Array<{ id: string; created_at: number; preview: string }> | undefined> {
+    const resp = await this.request('list_sessions', {});
+    const sessions = resp?.sessions;
+    return Array.isArray(sessions) ? (sessions as Array<{ id: string; created_at: number; preview: string }>) : undefined;
+  }
+
+  async resumeSession(sessionId: string): Promise<void> {
+    await this.request('resume_session', { sessionId });
   }
 
   /** 回复服务的权限请求（允许 / 拒绝）。 */
@@ -170,6 +209,13 @@ export class ServiceClient extends vscode.Disposable {
   }
 
   private dispatch(msg: ServerEvent): void {
+    // 请求-响应：响应里回显 requestId，先结算 pending
+    const rid = (msg.payload as Record<string, unknown>)?.requestId as string | undefined;
+    if (rid && this.pendingRequests.has(rid)) {
+      const resolve = this.pendingRequests.get(rid)!;
+      this.pendingRequests.delete(rid);
+      resolve(msg.payload);
+    }
     for (const handler of this.eventHandlers) {
       try {
         handler(msg);
@@ -239,7 +285,10 @@ export class ServiceClient extends vscode.Disposable {
 
   private send(type: string, payload: Record<string, unknown>): void {
     if (!this.ws || this.ws.readyState !== WS_OPEN) {
-      void vscode.window.showErrorMessage('WorkCode 服务未连接，请稍后重试。');
+      // 触发重连（可重试），并给友好提示而不是报错
+      void this.ensureRunning().catch(() => {
+        void vscode.window.showInformationMessage('WorkCode 服务连接中，请稍后再试。');
+      });
       return;
     }
     this.ws.send(JSON.stringify({ type, payload }));

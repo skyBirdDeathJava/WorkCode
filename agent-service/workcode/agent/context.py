@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..protocol import EditorContext
+from ..session.store import SUMMARY_PREFIX
 
 MAX_FILE_BODY_CHARS = 8000
 
@@ -27,6 +28,10 @@ def estimate_tokens(text: str) -> int:
     cjk = sum(1 for ch in text if ord(ch) > 0x2FFF)
     ascii_count = len(text) - cjk
     return cjk + ascii_count // 4
+
+
+def estimate_total_tokens(messages: list[dict]) -> int:
+    return sum(estimate_tokens(m.get("content", "")) for m in messages)
 
 
 def render_user_message(content: str, ctx: EditorContext | dict) -> str:
@@ -67,3 +72,42 @@ def build_messages(
             break
         messages.pop(1)  # 丢弃最旧的 user/assistant/tool 轮次
     return messages
+
+
+def extract_summary_source(messages: list[dict], max_chars: int = 8000) -> str:
+    """从旧消息里提取适合做摘要的文本（跳过 tool 内部细节）。"""
+    parts: list[str] = []
+    for m in messages:
+        role = m.get("role")
+        if role in ("user", "assistant"):
+            content = m.get("content", "")
+            if content and not content.startswith("（历史摘要）"):
+                parts.append(f"{role}: {content[:500]}")
+    return "\n".join(parts)[:max_chars]
+
+
+async def compact(
+    messages: list[dict],
+    model,
+    max_tokens: int,
+    keep_fraction: float = 0.4,
+) -> tuple[list[dict] | None, str]:
+    """历史超限时：保留最近的 keep_fraction，把更早的轮次用模型摘要。
+
+    返回 (新消息列表, 摘要文本)；未超限返回 (None, "")。
+    """
+    if estimate_total_tokens(messages) <= max_tokens:
+        return None, ""
+
+    keep_n = max(2, int(len(messages) * keep_fraction))
+    old = messages[:-keep_n]
+    recent = messages[-keep_n:]
+
+    source = extract_summary_source(old)
+    if not source:
+        # 没可摘要的内容（全是 tool 内部）→ 直接丢弃旧的
+        return recent, ""
+
+    summary = await model.summarize(source)
+    new_messages = [{"role": "system", "content": SUMMARY_PREFIX + summary}] + recent
+    return new_messages, summary

@@ -212,8 +212,23 @@ def main() -> int:
             print("✓ 终端桥：run_command → terminal_exec → 扩展执行 → 结果回传")
     else:
         print("· 跳过终端桥（真实模式）")
-        assert sess["type"] == "session_started", sess
-        print(f"✓ 新会话 {sess['payload']['sessionId']}")
+
+    # 6) 会话列表 + 恢复
+    with client.websocket_connect("/ws") as ws3:
+        ws3.send_json({"type": "connect", "payload": {}})
+        ws3.receive_json()
+        ws3.send_json({"type": "list_sessions", "payload": {"requestId": "r1"}})
+        lst = ws3.receive_json()
+        assert lst["type"] == "session_list", lst
+        sessions = lst["payload"]["sessions"]
+        assert isinstance(sessions, list) and len(sessions) >= 1, lst
+
+        sid = sessions[0]["id"]
+        ws3.send_json({"type": "resume_session", "payload": {"requestId": "r2", "sessionId": sid}})
+        resumed = ws3.receive_json()
+        assert resumed["type"] == "session_resumed", resumed
+        assert len(resumed["payload"]["messages"]) >= 1, resumed
+        print(f"✓ 会话列表 + 恢复：{len(sessions)} 个会话，恢复 {sid}（{len(resumed['payload']['messages'])} 条消息）")
 
     print("SMOKE TEST PASSED" if failures == 0 else "SMOKE TEST FAILED")
     return 0 if failures == 0 else 1

@@ -16,6 +16,8 @@ export type ClientMessageType =
   | 'permission_response'
   | 'apply_diff'
   | 'terminal_exec_result'
+  | 'list_sessions'
+  | 'resume_session'
   | 'cancel'
   | 'new_session';
 
@@ -23,6 +25,8 @@ export type ClientMessageType =
 export type ServerMessageType =
   | 'ready'
   | 'session_started'
+  | 'session_list'
+  | 'session_resumed'
   | 'text_delta'
   | 'tool_call'
   | 'tool_result'
@@ -125,6 +129,35 @@ export interface DiffPreviewPayload {
   path: string;
   originalContent: string;
   newContent: string;
+}
+
+/** 插件 → 服务：请求会话列表 / 恢复某个历史会话 */
+export interface ListSessionsPayload {
+  requestId?: string;
+}
+
+export interface ResumeSessionPayload {
+  requestId?: string;
+  sessionId: string;
+}
+
+export interface SessionItem {
+  id: string;
+  created_at: number;
+  preview: string;
+}
+
+/** 服务 → 插件：会话列表（用于恢复选择器） */
+export interface SessionListPayload {
+  requestId?: string;
+  sessions: SessionItem[];
+}
+
+/** 服务 → 插件：恢复的会话及其历史消息 */
+export interface SessionResumedPayload {
+  requestId?: string;
+  sessionId: string;
+  messages: Array<Record<string, unknown>>;
 }
 
 /** 服务 → 插件：请求在 VS Code 集成终端里执行命令 */

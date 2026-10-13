@@ -34,6 +34,10 @@ class ModelProvider:
     ) -> StepResult:
         raise NotImplementedError
 
+    async def summarize(self, text: str) -> str:
+        """把一段对话历史压缩成简洁摘要。"""
+        raise NotImplementedError
+
 
 class MockModel(ModelProvider):
     """不回真模型。发 !tool read_file <path> 会触发一次工具调用。"""
@@ -90,6 +94,9 @@ class MockModel(ModelProvider):
         text = f"[Mock 回复] 收到：{content[:120]}。当前处于 Mock 模式，未调用真实模型。"
         await _emit_deltas(text, on_delta)
         return StepResult(text=text)
+
+    async def summarize(self, text: str) -> str:
+        return f"[Mock 摘要] 此前讨论了 {len(text)} 字符的内容。"
 
 
 async def _emit_deltas(text: str, on_delta: OnDelta) -> None:
@@ -163,3 +170,27 @@ class DeepSeekModel(ModelProvider):
             )
 
         return step
+
+    async def summarize(self, text: str) -> str:
+        import litellm
+
+        if not self.api_key:
+            raise RuntimeError("未配置 DeepSeek API Key")
+        response = await litellm.acompletion(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是 WorkCode。请把下面的对话历史压缩成一段简洁的中文摘要，"
+                        "保留关键事实、文件路径、结论和待办。只输出摘要本身。"
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            api_key=self.api_key,
+            temperature=0.2,
+            max_tokens=500,
+        )
+        content = response.choices[0].message.content or ""
+        return content.strip()
