@@ -223,6 +223,8 @@ function getWebviewHtml(): string {
   }
   .chip:hover { border-color: var(--vscode-focusBorder, #3794ff); }
   #statusText { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .toolbar { display: flex; align-items: center; gap: 6px; }
+  .usage { font-size: 11px; color: var(--vscode-descriptionForeground, #9d9d9d); margin-left: auto; }
   #context {
     padding: 4px 10px; font-size: 11px; font-family: "SF Mono", Menlo, monospace;
     color: var(--vscode-descriptionForeground, #9d9d9d);
@@ -315,11 +317,7 @@ function getWebviewHtml(): string {
 </style>
 </head>
 <body>
-  <div id="status">
-    <span id="modeChip" class="chip" title="点击切换权限模式">Manual</span>
-    <span id="modelChip" class="chip" title="点击切换模型">…</span>
-    <span id="statusText">启动中…</span>
-  </div>
+  <div id="status"><span id="statusText">启动中…</span></div>
   <div id="context">…</div>
   <div id="messages"></div>
   <div id="history" class="history hidden">
@@ -336,6 +334,11 @@ function getWebviewHtml(): string {
       <button id="new">新会话</button>
     </div>
     <div class="hint">输入 @ 引用文件；选中代码后命令面板执行 “WorkCode: 解释选中代码”</div>
+    <div class="toolbar">
+      <span id="modeChip" class="chip" title="点击切换权限模式（Manual/Auto/Plan）">Manual</span>
+      <span id="modelChip" class="chip" title="点击切换模型">…</span>
+      <span id="usageText" class="usage"></span>
+    </div>
   </div>
 <script>
   const vscode = acquireVsCodeApi();
@@ -777,7 +780,10 @@ function getWebviewHtml(): string {
       case 'done': {
         const usage = evt.payload.usage || {};
         const total = (usage.promptTokens || 0) + (usage.completionTokens || 0);
-        setStatus(total ? \`✓ 完成 · 本轮 ~\${total} tokens\` : '✓ 完成');
+        document.getElementById('usageText').textContent = total
+          ? \`本轮 ~\${total} tokens\`
+          : '';
+        setStatus('✓ 完成');
         assistant = null;
         assistantText = '';
         break;
