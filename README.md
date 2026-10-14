@@ -3,17 +3,36 @@
 VS Code 插件形态的编程 Agent，对标 Claude Code。插件只做 UI 与编辑器适配，
 Agent 逻辑跑在独立的本地 Python 服务里。
 
-架构：`extension`（TypeScript 插件）— WebSocket — `agent-service`（Python/FastAPI）— DeepSeek API。
-协议类型由 `shared/` 定义，两端镜像。详见 [docs/](docs/)。
+架构：`extension`（TypeScript 插件）— WebSocket — `agent-service`（Python/FastAPI）— 模型 API（DeepSeek）。
+协议类型由 `shared/` 定义，两端镜像。
+
+> **📘 完整使用说明见 [使用说明文档.md](使用说明文档.md)**（界面、各功能操作、配置、FAQ）。
 
 ## 目录
 
 ```
-extension/         VS Code 插件（聊天面板、服务生命周期、编辑器上下文）
-agent-service/     Python Agent 服务（FastAPI + LiteLLM + 只读工具 + 权限闸门）
-shared/            通信协议（TS 类型；Python 侧用 pydantic 镜像）
+extension/         VS Code 插件（聊天面板、终端桥、Diff、服务生命周期）
+agent-service/     Python Agent 服务（FastAPI + LiteLLM + 工具 + 权限闸门 + 会话）
+shared/            跨语言通信协议（TS / pydantic 镜像）
 docs/              需求文档、技术方案、实施计划
 ```
+
+## 功能特性
+
+| 能力 | 说明 |
+|------|------|
+| AI 对话 | 结构化 Markdown 输出，上下文栏显示当前文件 + 选中行号 |
+| 读代码 | read_file / list_directory / search_files，解释选中代码 |
+| 改代码 | write_file / edit_file，**Diff 预览 → 聊天面板确认 → 落盘** |
+| 跑命令 | run_command 在 **VS Code 集成终端**执行，长驻进程（npm run dev）不超时 |
+| Web | web_search（Bing→DDG→Wikipedia 回退）+ web_fetch（SSRF 防护） |
+| 权限模式 | **Manual / Auto / Plan**，底部工具栏切换；危险命令硬拦 |
+| 模型切换 | 底部选模型（LiteLLM 标识），每轮显示 token 用量 |
+| @ 引用文件 | 输入 `@` 弹出文件列表，选中注入文件内容 |
+| 项目记忆 | 自动读取工作区 `WorkCode.md` / `CLAUDE.md` 注入上下文 |
+| git 感知 | 每轮注入分支、工作区变更、最近提交 |
+| 历史会话 | JSONL 持久化 + 🕘 图标恢复 + 上下文自动压缩摘要 |
+| 实时上下文 | 编辑器事件驱动，当前文件/选区实时推给面板 |
 
 ## 快速开始
 
@@ -37,17 +56,16 @@ pnpm run build
 # 5. 在 extension/ 下按 F5 启动「扩展开发宿主」，侧边栏出现 WorkCode 图标
 ```
 
-插件启动时会自动检测并拉起本地 Python 服务（优先用项目 `.venv`，
-其次 `python3`；也可用设置项 `workcode.pythonPath` / `workcode.serviceDir` 覆盖）。
+插件启动时自动检测并拉起本地 Python 服务（优先用项目 `.venv`，
+其次 `python3`；可用 `workcode.pythonPath` / `workcode.serviceDir` 覆盖）。
 
 ## 验证链路（无需 API Key）
 
-**Mock 模式**：设置项 `workcode.mock` 勾选，或先跑服务时加 `WORKCODE_MOCK=1`。
-Mock 模型会流式回显，且输入 `!tool read_file <路径>` 会触发一次真实文件读取，用于验证工具路径。
+**Mock 模式**：设置项 `workcode.mock` 勾选，或服务加 `WORKCODE_MOCK=1`。
 
 ```bash
-.venv/bin/python agent-service/scripts/smoke_test.py     # 全链路冒烟（Mock）
-.venv/bin/pytest agent-service/tests                     # 工具/权限闸门单测
+.venv/bin/python agent-service/scripts/smoke_test.py   # 全链路冒烟（Mock）
+cd agent-service && ../.venv/bin/python -m pytest tests/ -q   # 单测
 ```
 
 **真实模型冒烟**（需 Key）：
@@ -68,52 +86,56 @@ curl http://127.0.0.1:4877/healthz     # 健康检查
 
 | 设置 | 默认 | 说明 |
 |------|------|------|
-| `workcode.apiKey` | `""` | DeepSeek Key（明文，建议用命令存入 SecretStorage） |
-| `workcode.model` | `deepseek/deepseek-chat` | 模型标识（LiteLLM 格式） |
+| `workcode.apiKey` | `""` | 模型 Key（建议用命令存入 SecretStorage） |
+| `workcode.model` | `deepseek/deepseek-chat` | 模型标识（LiteLLM 格式），面板可切换 |
 | `workcode.servicePort` | `4877` | 本地服务端口 |
 | `workcode.pythonPath` | `""` | 留空自动检测 |
 | `workcode.serviceDir` | `""` | agent-service 目录，留空按插件路径推导 |
 | `workcode.mock` | `false` | Mock 模式，免 Key 验证链路 |
 
+## 环境变量（Python 服务）
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `DEEPSEEK_API_KEY` | `""` | 模型 API Key |
+| `WORKCODE_PORT` | `4877` | 服务端口 |
+| `WORKCODE_MODEL` | `deepseek/deepseek-chat` | 默认模型 |
+| `WORKCODE_MOCK` | `0` | Mock 模式 |
+| `WORKCODE_MAX_STEPS` | `25` | 单轮工具调用步数上限 |
+| `WORKCODE_MAX_CONTEXT_TOKENS` | `16000` | 上下文预算，超限自动压缩 |
+| `WORKCODE_SESSION_DIR` | `~/.workcode/sessions` | 会话存储目录 |
+
 ## 里程碑状态
 
-- [x] M1 能对话（Mock 全链路已通）
+- [x] M1 能对话
 - [x] M2 能读代码（当前文件/选区上下文注入 + 只读工具）
-- [x] M3 能改代码（write_file / edit_file，真实 DeepSeek 已验证改文件）
-- [x] M4 Diff 预览 + 确认应用（写操作先暂存，Diff 视图确认后才落盘，接受/拒绝均已验证）
-- [x] M5 运行命令 + 危险命令拦截（run_command：危险 deny / 安全白名单 allow / 其他弹窗确认）
-- [ ] M6 MVP 完成（真实任务调试 + 演示）
+- [x] M3 能改代码（write_file / edit_file，真实模型验证改文件）
+- [x] M4 Diff 预览 + 确认应用（暂存 → Diff 视图 → 接受/拒绝 → 落盘）
+- [x] M5 运行命令（VS Code 终端桥 + 危险命令拦截 + pty 回退）
+- [x] 会话持久化（JSONL + 历史恢复 + 自动压缩）
+- [x] 记忆与引用（WorkCode.md + @ 文件引用）
+- [x] 权限模式（Manual/Auto/Plan）+ 模型切换 + 用量显示
+- [x] Web 工具 + git 上下文感知
 
-会话持久化（对齐 Claude Code 的 transcript 机制）：
-- 每个会话一个 **JSONL 文件**（`~/.workcode/sessions/<id>.jsonl`），逐条追加，崩溃/中断只丢当前未写完的消息
-- **恢复历史会话**：命令面板 →「WorkCode: 恢复历史会话」，选择器列出各会话（首条消息 + 时间），选中即恢复，历史消息在聊天面板重新渲染
-- **自动压缩上下文**：历史超限时用模型把较早轮次压缩成摘要，摘要作为 `summary` 行落盘；长会话不失忆
+## 安全与交互
 
-安全与交互：
-- 只读工具默认 `allow`；路径在工作区外直接 `deny`。
-- 写文件（`write_file` / `edit_file`）：Agent 提议修改后**不直接落盘**，先在 VS Code
-  里以 Diff 对比视图展示，通知栏「接受修改 / 拒绝」，接受后才写盘，拒绝则告诉 Agent。
-- `run_command` 三层决策：危险命令（`rm -rf /`、`sudo`、`mkfs`、`git push --force` 等）
-  直接 `deny`；安全只读/构建/测试命令（`ls`、`cat`、`go build`、`npm test` 等）自动
-  `allow`；其他弹「允许 / 拒绝」确认。工具内还有第二道黑名单校验兜底。
-- **在 VS Code 集成终端里执行**（M5 扩展）：插件连接时声明 `terminalSupport`，
-  `run_command` 会在 VS Code 的**集成终端**里执行（自动创建/复用「WorkCode」终端，
-  输出实时可见）。长驻进程（`npm run dev`）不会超时报错——超时后报告「仍在运行」，
-  终端继续留给用户。
-- **pty 回退**：带 `input` 的交互命令、或服务端 standalone 运行时，走服务端 pty
-  终端（`cwd`/环境变量跨命令保持、`isatty()` 为真、交互式程序可读 stdin）。
-  输出剥离 ANSI 转义序列，`TERM=dumb` 关闭 readline 重绘噪音。
+- 只读工具（读/列/搜/网页搜索）默认 `allow`；路径在工作区外 `deny`。
+- 写文件：**Diff 预览 → 面板确认 → 落盘**，接受才写。
+- 命令：危险命令（`rm -rf /`、`sudo`、`mkfs`、`git push --force` 等）硬拦；
+  安全命令（`ls`、`cat`、`go build`、`npm test` 等）免确认；其他按权限模式确认。
+- 网页抓取：需确认，拒绝内网/回环（SSRF 防护）。
+- API Key 存 VS Code SecretStorage，`.env` 已 gitignore。
 
 ## 测试
 
 ```bash
-# 工具/权限/循环单测（10 个）
+# 单测（40 个：工具/权限/循环/会话/压缩/Web/git）
 cd agent-service && ../.venv/bin/python -m pytest tests/ -q
 
-# 全链路冒烟（Mock，免 Key；含权限弹窗流程）
+# 全链路冒烟（Mock，免 Key）
 ../.venv/bin/python scripts/smoke_test.py
 
-# 真实模型验证（M3 改文件 / M5 跑命令，自动允许权限）
+# 真实模型验证（改文件 / 跑命令，自动允许权限）
 ../.venv/bin/python scripts/test_m3_real.py
 ../.venv/bin/python scripts/test_m5_real.py
 ```
