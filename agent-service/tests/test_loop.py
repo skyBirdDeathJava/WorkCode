@@ -12,7 +12,19 @@ from pathlib import Path
 import pytest
 
 from workcode.agent.loop import AgentLoop
-from workcode.agent.model import MockModel, StepResult
+from workcode.agent.model import MockModel, StepResult, ModelProvider
+
+
+class DeadlockModel(ModelProvider):
+    """永远返回同一个工具调用（模拟模型跑偏死循环）。"""
+
+    async def stream(self, messages, tools, on_delta, on_reasoning=None) -> StepResult:
+        return StepResult(
+            tool_calls=[{"id": "x", "name": "read_file", "arguments": {"path": "/tmp/__loop__"}}]
+        )
+
+    async def summarize(self, text: str) -> str:
+        return "[摘要]"
 from workcode.config import Settings
 from workcode.gateway import Gateway
 from workcode.session.store import SessionStore
@@ -127,3 +139,32 @@ async def test_loop_auto_compact(tmp_path: Path) -> None:
     assert any(
         '"type": "summary"' in line for line in path.read_text(encoding="utf-8").splitlines()
     ), "摘要应落盘 JSONL"
+
+
+async def test_loop_deadlock_detection(tmp_path: Path) -> None:
+    """模型反复调用同一工具（无进展）→ 应被死循环检测停止，而不是跑满步数。"""
+    sessions = str(tmp_path / "sessions")
+    store = SessionStore(sessions)
+    session = store.create_session()
+    loop = AgentLoop(
+        DeadlockModel(),
+        build_registry(),
+        Gateway(),
+        store,
+        Settings(session_dir=sessions),
+    )
+    editor = {"workspaceRoot": str(tmp_path), "currentFile": None, "selection": None, "openFiles": []}
+    events: list[tuple[str, dict]] = []
+
+    async def emit(kind: str, payload: dict) -> None:
+        events.append((kind, payload))
+
+    await loop.run(session, "hi", editor, emit)
+
+    assert any(
+        kind == "error" and "重复调用" in payload.get("message", "")
+        for kind, payload in events
+    ), "应触发重复调用检测"
+    # 工具调用次数应很少（远小于 max_steps）
+    tool_calls = sum(1 for k, _ in events if k == "tool_call")
+    assert tool_calls <= 3, f"应尽早停止，实际调用了 {tool_calls} 次"

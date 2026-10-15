@@ -82,6 +82,10 @@ class SetModelPayload(BaseModel):
     model: str
 
 
+class SetEffortPayload(BaseModel):
+    effort: str  # none | low | high | max
+
+
 class SessionItem(BaseModel):
     id: str
     created_at: float
@@ -143,6 +147,10 @@ class ErrorPayload(BaseModel):
     message: str
 
 
+class ReasoningDeltaPayload(BaseModel):
+    delta: str
+
+
 class DiffPreviewPayload(BaseModel):
     requestId: str
     path: str
@@ -171,6 +179,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "resume_session": ResumeSessionPayload,
     "set_mode": SetModePayload,
     "set_model": SetModelPayload,
+    "set_effort": SetEffortPayload,
     "ready": ReadyPayload,
     "session_started": SessionStartedPayload,
     "session_list": SessionListPayload,
@@ -181,6 +190,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "permission_request": PermissionRequestPayload,
     "diff_preview": DiffPreviewPayload,
     "terminal_exec": TerminalExecPayload,
+    "reasoning_delta": ReasoningDeltaPayload,
     "error": ErrorPayload,
     "done": DonePayload,
 }

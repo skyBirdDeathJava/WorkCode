@@ -56,6 +56,7 @@ def make_app(settings: Settings) -> FastAPI:
         terminal = TerminalSession()
         api_key: str = settings.api_key
         model_name: str = settings.model
+        effort: str = settings.effort
         mode = "manual"  # manual | auto | plan
         terminal_supported = False  # 插件连接时声明，决定 run_command 是否桥接到 VS Code 终端
 
@@ -66,7 +67,7 @@ def make_app(settings: Settings) -> FastAPI:
             await out.put(json.dumps({"type": kind, "sessionId": session_id(), "payload": payload}))
 
         def build_loop() -> AgentLoop:
-            model = MockModel() if settings.mock else DeepSeekModel(api_key=api_key, model=model_name)
+            model = MockModel() if settings.mock else DeepSeekModel(api_key=api_key, model=model_name, effort=effort)
             return AgentLoop(
                 model, registry, gateway, store, settings,
                 terminal=terminal, terminal_supported=terminal_supported, mode=mode,
@@ -112,6 +113,12 @@ def make_app(settings: Settings) -> FastAPI:
                     if new_model:
                         model_name = new_model
                         await emit("ready", {"ok": True, "message": f"模型已切换：{model_name}", "model": model_name, "mode": mode})
+
+                elif kind == "set_effort":
+                    new_effort = payload.get("effort", "")
+                    if new_effort in ("none", "low", "high", "max"):
+                        effort = new_effort
+                        await emit("ready", {"ok": True, "message": f"思考程度已切换：{effort}", "model": model_name, "mode": mode})
 
                 elif kind == "new_session":
                     if task is not None and not task.done():

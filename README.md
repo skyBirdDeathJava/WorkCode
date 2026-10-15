@@ -99,9 +99,10 @@ curl http://127.0.0.1:4877/healthz     # 健康检查
 |------|------|------|
 | `DEEPSEEK_API_KEY` | `""` | 模型 API Key |
 | `WORKCODE_PORT` | `4877` | 服务端口 |
-| `WORKCODE_MODEL` | `deepseek/deepseek-chat` | 默认模型 |
+| `WORKCODE_MODEL` | `deepseek/deepseek-flash` | 默认模型（flash / v4-pro） |
+| `WORKCODE_EFFORT` | `low` | 思考程度（none/low/high/max，none=关思考） |
 | `WORKCODE_MOCK` | `0` | Mock 模式 |
-| `WORKCODE_MAX_STEPS` | `25` | 单轮工具调用步数上限 |
+| `WORKCODE_MAX_STEPS` | `10000` | 单轮工具调用步数上限（实际无限；真死循环由重复调用检测兜底） |
 | `WORKCODE_MAX_CONTEXT_TOKENS` | `16000` | 上下文预算，超限自动压缩 |
 | `WORKCODE_SESSION_DIR` | `~/.workcode/sessions` | 会话存储目录 |
 

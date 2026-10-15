@@ -120,23 +120,31 @@ class AgentLoop:
         # git 上下文：每轮加载一次注入系统提示
         git_ctx = context.load_git_context(self._workspace_root)
 
+        # 死循环检测状态
+        last_sig: tuple = ()
+        repeat_count = 0
+
         for step in range(self.settings.max_steps):
+            # messages 包含用户消息（包含引用文件等）+历史对话+系统提示词
             messages = context.build_messages(
-                session.messages,
-                editor_ctx,
-                self.settings.max_context_tokens,
+                session.messages,# 用户消息（包含引用文件等）+历史对话
+                editor_ctx, # 工作根路径，选中文件，选中代码
+                self.settings.max_context_tokens, # 上下文最大token数
                 mode=self.mode,
-                extra_system=(f"【Git 状态】\n{git_ctx}" if git_ctx else ""),
+                extra_system=(f"【Git 状态】\n{git_ctx}" if git_ctx else ""),#git记录上下文
             )
-            # 用量统计（估算 token）
+            # 用量统计（估算 输入给大模型的token）
             self._usage["promptTokens"] += context.estimate_total_tokens(messages)
             async def on_delta(delta: str) -> None:
-                self._usage["completionTokens"] += context.estimate_tokens(delta)
+                self._usage["completionTokens"] += context.estimate_tokens(delta) #推送给前端的token,输出
                 await emit("text_delta", {"delta": delta})
+
+            async def on_reasoning(delta: str) -> None:
+                await emit("reasoning_delta", {"delta": delta})
 
             try:
                 result = await asyncio.wait_for(
-                    self.model.stream(messages, self.registry.schema(), on_delta),
+                    self.model.stream(messages, self.registry.schema(), on_delta, on_reasoning),
                     timeout=self.settings.model_timeout_seconds,
                 )
             except asyncio.CancelledError:
@@ -150,7 +158,24 @@ class AgentLoop:
                 await emit("error", {"message": f"模型调用失败：{e}"})
                 break
 
-            if result.tool_calls:
+            if result.tool_calls: #本次agent循环调用大模型返回了工具调用，无content的
+                # 死循环检测：连续 3 次agent循环调用完全相同的工具+参数且无进展 → 停止
+                sig = tuple(
+                    (c.get("name", ""), str(c.get("arguments", ""))[:200])
+                    for c in result.tool_calls
+                )
+                if sig == last_sig:
+                    repeat_count += 1
+                else:
+                    repeat_count = 0
+                last_sig = sig
+                if repeat_count >= 3:
+                    await emit(
+                        "error",
+                        {"message": "模型在重复调用相同的工具且没有进展，为避免浪费已停止。你可以换个说法再试。"},
+                    )
+                    break
+
                 # 先把 assistant 的 tool_calls 消息写进历史，再执行工具，
                 # 否则模型 API 会因缺少该消息而 400（OpenAI 兼容协议要求）
                 self._append_assistant_tool_call(session, result)
@@ -158,7 +183,7 @@ class AgentLoop:
                 await self._handle_tool_calls(result.tool_calls, session, editor_ctx, emit)
                 continue
 
-            if result.text:
+            if result.text: #本次agent循环调用大模型返回了答案文本，最终答案，因为如果不是最终答案，模型会返回工具调用，工具调用时没有content的
                 self._append_message(session, {"role": "assistant", "content": result.text})
                 await emit("done", {"usage": dict(self._usage)})
                 return
@@ -225,7 +250,7 @@ class AgentLoop:
             args = _parse_arguments(call.get("arguments"))
 
             # run_command 默认在工作区根目录执行（仅首次定位终端，之后保持 shell 状态）
-            if name == "run_command" and not args.get("cwd") and workspace_root:
+            if name == "run_command" and not args.get("cwd") and workspace_root: #cwd，执行命令的路径
                 args["cwd"] = workspace_root
 
             await emit("tool_call", {"requestId": call_id, "tool": name, "arguments": args})
@@ -239,7 +264,7 @@ class AgentLoop:
                 if name in WRITE_TOOLS:
                     # 写操作走「Diff 预览 → 用户接受 → 落盘」流程
                     ok, output = await self._handle_write_with_diff(name, args, emit)
-                else:
+                else: # 非写工具走通用权限弹窗（M5 的 run_command）
                     ok, output = await self._handle_permission_ask(name, args, emit)
                 await emit("tool_result", _result_payload(call_id, name, ok, output, args))
             else:  # allow

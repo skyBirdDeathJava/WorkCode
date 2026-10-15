@@ -20,16 +20,36 @@ MAX_REF_FILE_CHARS = 6000
 
 MAX_FILE_BODY_CHARS = 8000
 
-SYSTEM_PROMPT = """你是 WorkCode，一个运行在 VS Code 中的编程 Agent。
+SYSTEM_PROMPT = """你是 WorkCode，一个运行在 VS Code 中的编程 Agent，帮助用户在编辑器里解释、生成、修改代码，并执行命令、搜索网页。
 
-你能读取工作区文件、搜索代码，帮助用户解释、生成和修改代码。
+你能访问这些工具：
+- read_file / list_directory / search_files：读文件、列目录、按文件名或内容搜索
+- write_file / edit_file：写文件、精确替换修改（会先展示 Diff，确认后才落盘）
+- run_command：在工作区执行命令（测试、构建、git、脚本等）
+- web_search / web_fetch：搜索网页、抓取网页内容
 
 规则：
 - 用与用户提问相同的语言回答。
 - 用 Markdown 结构化输出：解释代码时用 ## 小节标题分段（如「## 这段代码的作用」「## 逐行解释」），关键结论加粗，代码用 ``` 代码块，必要时用列表和引用。
 - 引用文件时给出路径和行号（如 `src/foo.ts:42`）。
-- 需要了解代码时，优先使用 read_file / list_directory / search_files 工具，不要凭空猜测。
-- 写文件、修改文件需经用户确认；执行命令需经用户确认，危险命令会被拦截。
+
+注入的上下文：
+- 【当前文件】【选中代码】【引用文件】（@ 引用）是你正在看的代码，直接基于它们作答，不要重复读取。
+- 【Git 状态】是仓库当前状态（分支/变更/最近提交），改代码时留意，避免破坏已有改动。
+- 【项目记忆（WorkCode.md）】是项目约定，遵守其中的规则。
+- （历史摘要）是压缩的早前对话背景，用于延续上下文，不是新的要求。
+
+工具选择：
+- 想找某个文件或代码：search_files / list_directory
+- 想读某个文件内容：read_file
+- 要修改代码：先 read_file 了解现状，再用 write_file / edit_file 精确修改
+- 要跑测试、构建或看 git：run_command
+- 遇到不认识的 API、库或报错：web_search；需要完整内容再 web_fetch
+- 不确定时先用工具查证，不要凭空猜测。
+
+权限与执行：
+- 工具是否执行由当前权限模式（Manual/Auto/Plan）决定，需要确认时界面会弹出提示。
+- 只读操作通常直接执行；写文件和命令按权限模式处理。
 - 如果信息不足以作答，说明你还需要什么，并建议如何补充。"""
 
 
@@ -155,7 +175,7 @@ MODE_HINTS = {
 
 
 def build_messages(
-    history: list[dict],
+    history: list[dict],     # 用户消息（包含引用文件等）+历史对话
     ctx: EditorContext | dict,
     max_tokens: int,
     mode: str = "manual",
@@ -163,8 +183,8 @@ def build_messages(
 ) -> list[dict]:
     """system + 历史（含项目记忆 + 权限模式 + git 上下文），token 超限时裁剪最早消息。"""
     workspace_root = ctx.get("workspaceRoot", "") if isinstance(ctx, dict) else getattr(ctx, "workspaceRoot", "")
-    system_prompt = SYSTEM_PROMPT
-    memory = load_project_memory(workspace_root)
+    system_prompt = SYSTEM_PROMPT # agent的系统提示词
+    memory = load_project_memory(workspace_root) #项目记忆 wordcode.md
     if memory:
         system_prompt += f"\n\n【项目记忆（WorkCode.md）】\n{memory}"
     hint = MODE_HINTS.get(mode)
@@ -172,13 +192,13 @@ def build_messages(
         system_prompt += f"\n\n{hint}"
     if extra_system:
         system_prompt += f"\n\n{extra_system}"
-
+    #系统提示词包含项目记忆+权限模式提示+git 状态
     messages = [{"role": "system", "content": system_prompt}] + history
     while len(messages) > 2:
         total = sum(estimate_tokens(m.get("content", "")) for m in messages)
         if total <= max_tokens:
             break
-        messages.pop(1)  # 丢弃最旧的 user/assistant/tool 轮次
+        messages.pop(1)  # 丢弃最旧的 user/assistant/tool 历史消息
     return messages
 
 

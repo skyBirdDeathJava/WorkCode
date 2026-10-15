@@ -26,7 +26,10 @@ class Settings:
     host: str = field(default_factory=lambda: os.environ.get("WORKCODE_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(os.environ.get("WORKCODE_PORT", "4877")))
     model: str = field(
-        default_factory=lambda: os.environ.get("WORKCODE_MODEL", "deepseek/deepseek-chat")
+        default_factory=lambda: os.environ.get("WORKCODE_MODEL", "deepseek/deepseek-flash")
+    )
+    effort: str = field(
+        default_factory=lambda: os.environ.get("WORKCODE_EFFORT", "low")
     )
     api_key: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_API_KEY", ""))
     mock: bool = field(
@@ -38,9 +41,9 @@ class Settings:
             str(Path.home() / ".workcode" / "sessions"),
         )
     )
-    # 单条消息内模型连续工具调用的步数上限（防死循环；会话轮数不设限，每轮重新计数）
+    # 单条消息内模型连续工具调用的步数上限即单轮对话的 Agent 循环次数（实际无限，默认 10000；真死循环由重复调用检测兜底）
     max_steps: int = field(
-        default_factory=lambda: int(os.environ.get("WORKCODE_MAX_STEPS", "25"))
+        default_factory=lambda: int(os.environ.get("WORKCODE_MAX_STEPS", "10000"))
     )
     max_context_tokens: int = field(
         default_factory=lambda: int(os.environ.get("WORKCODE_MAX_CONTEXT_TOKENS", "16000"))

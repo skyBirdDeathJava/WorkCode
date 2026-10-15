@@ -18,6 +18,7 @@ export type ClientMessageType =
   | 'terminal_exec_result'
   | 'list_sessions'
   | 'resume_session'
+  | 'set_effort'
   | 'cancel'
   | 'new_session';
 
@@ -33,6 +34,7 @@ export type ServerMessageType =
   | 'permission_request'
   | 'diff_preview'
   | 'terminal_exec'
+  | 'reasoning_delta'
   | 'error'
   | 'done';
 

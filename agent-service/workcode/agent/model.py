@@ -21,6 +21,7 @@ OnDelta = Callable[[str], Awaitable[None]]
 class StepResult:
     text: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    reasoning: str = ""  # 思考模式下的推理轨迹（reasoning_content）
 
 
 class ModelProvider:
@@ -31,6 +32,7 @@ class ModelProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         on_delta: OnDelta,
+        on_reasoning: OnDelta | None = None,
     ) -> StepResult:
         raise NotImplementedError
 
@@ -49,6 +51,7 @@ class MockModel(ModelProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         on_delta: OnDelta,
+        on_reasoning: OnDelta | None = None,
     ) -> StepResult:
         last = messages[-1] if messages else {"role": "user", "content": ""}
 
@@ -106,34 +109,60 @@ async def _emit_deltas(text: str, on_delta: OnDelta) -> None:
 
 
 class DeepSeekModel(ModelProvider):
-    name = "deepseek"
+    """基于 OpenAI SDK（DeepSeek 官方推荐，API 完全兼容）调用 deepseek-flash / deepseek-v4-pro。
 
-    def __init__(self, api_key: str, model: str = "deepseek/deepseek-chat") -> None:
+    参数按 DeepSeek Chat Completions 文档：
+    - model: 去掉 LiteLLM 风格前缀后传给 API（deepseek-flash / deepseek-v4-pro）
+    - reasoning_effort: 顶层字段，none 关思考，low/high/max 开思考（默认 high）
+    - 思考模式下响应带 reasoning_content（推理过程），此处不展示
+    """
+
+    name = "deepseek"
+    BASE_URL = "https://api.deepseek.com"
+
+    def __init__(self, api_key: str, model: str = "deepseek/deepseek-flash", effort: str = "low") -> None:
         self.api_key = api_key
         self.model = model
+        self.effort = effort
+        self._client = None  # 延迟创建，未装 openai 时服务仍能启动
+
+    def _api_model(self) -> str:
+        return self.model.split("/")[-1] or self.model
+
+    def _client_sync(self):
+        if self._client is None:
+            from openai import AsyncOpenAI  # 延迟导入
+
+            self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.BASE_URL)
+        return self._client
 
     async def stream(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        on_delta: OnDelta,
+        on_delta: OnDelta, #推送delta的回调函数
+        on_reasoning: OnDelta | None = None,
     ) -> StepResult:
-        import litellm  # 延迟导入：未装 litellm 时服务仍可启动（Mock 模式可用）
-
         if not self.api_key:
             raise RuntimeError("未配置 DeepSeek API Key（环境变量 DEEPSEEK_API_KEY 或握手时传入）")
 
         step = StepResult()
         tool_acc: dict[int, dict[str, str]] = {}
 
-        response = await litellm.acompletion(
-            model=self.model,
-            messages=messages,
-            tools=tools or None,
-            stream=True,
-            api_key=self.api_key,
-            temperature=0.2,
-        )
+        # 按 DeepSeek 官方示例：reasoning_effort 作为顶层参数，thinking 用 extra_body 显式开关
+        thinking_on = bool(self.effort) and self.effort != "none"
+        kwargs: dict[str, Any] = {
+            "model": self._api_model(),
+            "messages": messages,
+            "tools": tools or None,
+            "stream": True,
+            "temperature": 0.2,
+        }
+        if thinking_on:
+            kwargs["reasoning_effort"] = self.effort  # none/low/high/max（none 即关思考，故只在开启时传）
+        kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking_on else "disabled"}}
+
+        response = await self._client_sync().chat.completions.create(**kwargs)
 
         async for chunk in response:
             if not chunk.choices:
@@ -141,7 +170,12 @@ class DeepSeekModel(ModelProvider):
             delta = chunk.choices[0].delta
             if delta is None:
                 continue
-            if getattr(delta, "content", None):
+            if getattr(delta, "reasoning_content", None): #getattr(obj, name, default) = 安全地取对象的某个属性——取得到就返回，取不到就返回默认值（而不是报错）。
+                # 思考模式的推理轨迹（在最终答案之前）大模型的思考内容
+                step.reasoning += delta.reasoning_content
+                if on_reasoning: #如果传了输出推理内容的回调函数，就调用它
+                    await on_reasoning(delta.reasoning_content)
+            if getattr(delta, "content", None): #大模型的回答内容
                 step.text += delta.content
                 await on_delta(delta.content)
             tool_calls = getattr(delta, "tool_calls", None) or []
@@ -172,12 +206,10 @@ class DeepSeekModel(ModelProvider):
         return step
 
     async def summarize(self, text: str) -> str:
-        import litellm
-
         if not self.api_key:
             raise RuntimeError("未配置 DeepSeek API Key")
-        response = await litellm.acompletion(
-            model=self.model,
+        response = await self._client_sync().chat.completions.create(
+            model=self._api_model(),
             messages=[
                 {
                     "role": "system",
@@ -188,7 +220,6 @@ class DeepSeekModel(ModelProvider):
                 },
                 {"role": "user", "content": text},
             ],
-            api_key=self.api_key,
             temperature=0.2,
             max_tokens=500,
         )
