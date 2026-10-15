@@ -86,6 +86,20 @@ class SetEffortPayload(BaseModel):
     effort: str  # none | low | high | max
 
 
+class GetMemoryPayload(BaseModel):
+    requestId: Optional[str] = None
+
+
+class MemoryAddPayload(BaseModel):
+    requestId: Optional[str] = None
+    text: str
+
+
+class MemoryContentPayload(BaseModel):
+    requestId: Optional[str] = None
+    content: str
+
+
 class SessionItem(BaseModel):
     id: str
     created_at: float
@@ -180,6 +194,9 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "set_mode": SetModePayload,
     "set_model": SetModelPayload,
     "set_effort": SetEffortPayload,
+    "get_memory": GetMemoryPayload,
+    "memory_add": MemoryAddPayload,
+    "memory_content": MemoryContentPayload,
     "ready": ReadyPayload,
     "session_started": SessionStartedPayload,
     "session_list": SessionListPayload,

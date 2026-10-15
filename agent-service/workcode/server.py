@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from .agent import context
 from .agent.loop import AgentLoop
 from .agent.model import DeepSeekModel, MockModel
 from .config import Settings, load_settings
@@ -119,6 +120,17 @@ def make_app(settings: Settings) -> FastAPI:
                     if new_effort in ("none", "low", "high", "max"):
                         effort = new_effort
                         await emit("ready", {"ok": True, "message": f"思考程度已切换：{effort}", "model": model_name, "mode": mode})
+
+                elif kind == "get_memory":
+                    content = context.load_user_memory(settings.memory_file)
+                    await emit("memory_content", {"requestId": payload.get("requestId", ""), "content": content})
+
+                elif kind == "memory_add":
+                    text = payload.get("text", "").strip()
+                    if text:
+                        context.append_user_memory(settings.memory_file, text)
+                    content = context.load_user_memory(settings.memory_file)
+                    await emit("memory_content", {"requestId": payload.get("requestId", ""), "content": content})
 
                 elif kind == "new_session":
                     if task is not None and not task.done():

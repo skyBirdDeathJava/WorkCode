@@ -81,6 +81,17 @@ export class ServiceClient extends vscode.Disposable {
     this.send('set_effort', { effort });
   }
 
+  /** 读取/追加跨项目用户记忆（~/.workcode/memory.md）。 */
+  async getMemory(): Promise<string | undefined> {
+    const resp = await this.request('get_memory', {});
+    return resp?.content as string | undefined;
+  }
+
+  async addMemory(text: string): Promise<string | undefined> {
+    const resp = await this.request('memory_add', { text });
+    return resp?.content as string | undefined;
+  }
+
   /** 请求-响应：带 requestId 的往返，服务端在响应里回显 requestId。请求前先确保连接。 */
   async request(type: string, payload: Record<string, unknown>): Promise<Record<string, unknown> | undefined> {
     try {

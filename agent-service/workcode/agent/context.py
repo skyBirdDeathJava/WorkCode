@@ -67,6 +67,29 @@ def estimate_total_tokens(messages: list[dict]) -> int:
     return sum(estimate_tokens(m.get("content", "")) for m in messages)
 
 
+def load_user_memory(memory_file: str) -> str:
+    """读取跨项目用户记忆（~/.workcode/memory.md），换项目也生效。"""
+    if not memory_file:
+        return ""
+    p = Path(memory_file)
+    if p.is_file():
+        try:
+            return p.read_text(encoding="utf-8", errors="replace")[:MAX_MEMORY_CHARS]
+        except OSError:
+            return ""
+    return ""
+
+
+def append_user_memory(memory_file: str, text: str) -> None:
+    """向用户记忆文件追加一条偏好（/memory add 用）。"""
+    if not memory_file or not text.strip():
+        return
+    p = Path(memory_file)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(f"- {text.strip()}\n")
+
+
 def load_project_memory(workspace_root: str) -> str:
     """读取工作区根目录的 WorkCode.md（或 CLAUDE.md），作为项目记忆注入。"""
     if not workspace_root:

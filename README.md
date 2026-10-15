@@ -105,6 +105,7 @@ curl http://127.0.0.1:4877/healthz     # 健康检查
 | `WORKCODE_MAX_STEPS` | `10000` | 单轮工具调用步数上限（实际无限；真死循环由重复调用检测兜底） |
 | `WORKCODE_MAX_CONTEXT_TOKENS` | `16000` | 上下文预算，超限自动压缩 |
 | `WORKCODE_SESSION_DIR` | `~/.workcode/sessions` | 会话存储目录 |
+| `WORKCODE_MEMORY_FILE` | `~/.workcode/memory.md` | 跨项目用户记忆文件 |
 
 ## 里程碑状态
 

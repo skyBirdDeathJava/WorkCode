@@ -72,6 +72,20 @@ async def test_compact_under_budget_noop() -> None:
     assert summary == ""
 
 
+def test_user_memory_read_append(tmp_path: Path) -> None:
+    from workcode.agent.context import append_user_memory, load_user_memory
+
+    mem = str(tmp_path / "memory.md")
+    # 空文件 → 空
+    assert load_user_memory(mem) == ""
+    # 追加 → 读出来
+    append_user_memory(mem, "我喜欢用单引号")
+    append_user_memory(mem, "错误文案用中文")
+    content = load_user_memory(mem)
+    assert "单引号" in content
+    assert "中文" in content
+
+
 def test_load_project_memory_priority(tmp_path: Path) -> None:
     from workcode.agent.context import load_project_memory
 

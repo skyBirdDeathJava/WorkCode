@@ -19,6 +19,8 @@ export type ClientMessageType =
   | 'list_sessions'
   | 'resume_session'
   | 'set_effort'
+  | 'get_memory'
+  | 'memory_add'
   | 'cancel'
   | 'new_session';
 
@@ -35,6 +37,7 @@ export type ServerMessageType =
   | 'diff_preview'
   | 'terminal_exec'
   | 'reasoning_delta'
+  | 'memory_content'
   | 'error'
   | 'done';
 

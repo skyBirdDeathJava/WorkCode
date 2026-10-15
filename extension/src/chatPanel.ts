@@ -63,6 +63,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case 'setEffort':
           this.applyEffort(String(msg.effort ?? ''));
           break;
+        case 'memoryGet':
+          void this.sendMemory();
+          break;
+        case 'memoryAdd':
+          void this.addMemory(String(msg.text ?? ''));
+          break;
         case 'pickModel':
           void this.pickModel();
           break;
@@ -176,6 +182,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       ignoreFocusOut: true,
     });
     if (model) await this.applyModel(model);
+  }
+
+  /** 读取用户记忆并回推给 Webview。 */
+  private async sendMemory(): Promise<void> {
+    const content = (await this.client.getMemory()) || '';
+    void this.view?.webview.postMessage({ type: 'memoryContent', content });
+  }
+
+  /** 追加一条用户记忆并回推更新后的内容。 */
+  private async addMemory(text: string): Promise<void> {
+    const content = (await this.client.addMemory(text)) || '';
+    void this.view?.webview.postMessage({ type: 'memoryContent', content });
   }
 
   /** 把选中的模型写入配置，并让服务端切换。 */
@@ -1128,6 +1146,7 @@ function getWebviewHtml(): string {
     { cmd: '/model', desc: '切换模型' },
     { cmd: '/mode', desc: '切换权限模式 manual / auto / plan', needsArg: true },
     { cmd: '/effort', desc: '切换思考程度 none / low / high / max', needsArg: true },
+    { cmd: '/memory', desc: '查看 / 追加跨项目用户记忆，如 /memory 我喜欢用单引号' },
     { cmd: '/cost', desc: '查看本次会话 token 用量' },
   ];
   const SLASH_HELP = SLASH_COMMANDS.map(function (c) {
@@ -1170,6 +1189,13 @@ function getWebviewHtml(): string {
         vscode.postMessage({ type: 'setEffort', effort: e });
       } else {
         addBubble('assistant', '用法：/effort none | low | high | max');
+      }
+    } else if (cmd === '/memory') {
+      const text = arg.trim();
+      if (text) {
+        vscode.postMessage({ type: 'memoryAdd', text });
+      } else {
+        vscode.postMessage({ type: 'memoryGet' });
       }
     } else if (cmd === '/cost') {
       addBubble('assistant', '本次会话累计约 ' + sessionTokens + ' tokens');
@@ -1420,6 +1446,11 @@ function getWebviewHtml(): string {
     }
     if (msg.type === 'fileList') {
       renderAtList(msg.files || []);
+      return;
+    }
+    if (msg.type === 'memoryContent') {
+      const content = msg.content || '';
+      addBubble('assistant', '### 用户记忆 (memory.md)\\n\`\`\`\\n' + (content || '(空)') + '\\n\`\`\`');
       return;
     }
     if (msg.type === 'context') {

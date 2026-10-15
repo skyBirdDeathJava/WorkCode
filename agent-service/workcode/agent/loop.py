@@ -117,8 +117,15 @@ class AgentLoop:
 
         self._append_message(session, {"role": "user", "content": context.render_user_message(content, editor_ctx)})
 
-        # git 上下文：每轮加载一次注入系统提示
+        # git 上下文 + 跨项目用户记忆：每轮加载一次注入系统提示
         git_ctx = context.load_git_context(self._workspace_root)
+        user_memory = context.load_user_memory(self.settings.memory_file)
+        extras = []
+        if user_memory:
+            extras.append(f"【用户记忆（memory.md）】\n{user_memory}")
+        if git_ctx:
+            extras.append(f"【Git 状态】\n{git_ctx}")
+        extra_system = "\n\n".join(extras)
 
         # 死循环检测状态
         last_sig: tuple = ()
@@ -131,7 +138,7 @@ class AgentLoop:
                 editor_ctx, # 工作根路径，选中文件，选中代码
                 self.settings.max_context_tokens, # 上下文最大token数
                 mode=self.mode,
-                extra_system=(f"【Git 状态】\n{git_ctx}" if git_ctx else ""),#git记录上下文
+                extra_system=extra_system,
             )
             # 用量统计（估算 输入给大模型的token）
             self._usage["promptTokens"] += context.estimate_total_tokens(messages)
