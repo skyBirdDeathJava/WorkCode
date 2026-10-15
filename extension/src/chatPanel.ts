@@ -57,6 +57,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case 'toggleEffort':
           this.toggleEffort();
           break;
+        case 'setMode':
+          this.applyMode(String(msg.mode ?? ''));
+          break;
+        case 'setEffort':
+          this.applyEffort(String(msg.effort ?? ''));
+          break;
         case 'pickModel':
           void this.pickModel();
           break;
@@ -144,6 +150,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const idx = order.indexOf(this.currentEffort);
     this.currentEffort = order[(idx + 1) % order.length];
     this.client.setEffort(this.currentEffort);
+  }
+
+  /** 设置指定权限模式（slash 命令用）。 */
+  private applyMode(mode: string): void {
+    if (mode === 'manual' || mode === 'auto' || mode === 'plan') {
+      this.currentMode = mode;
+      this.client.setMode(mode);
+    }
+  }
+
+  /** 设置指定思考程度（slash 命令用）。 */
+  private applyEffort(effort: string): void {
+    if (effort === 'none' || effort === 'low' || effort === 'high' || effort === 'max') {
+      this.currentEffort = effort;
+      this.client.setEffort(effort);
+    }
   }
 
   /** 自定义模型：输入 LiteLLM 标识后写入配置并通知服务端。 */
@@ -350,6 +372,26 @@ function getWebviewHtml(): string {
   .at-item { padding: 6px 10px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .at-item.active { background: #0e639c; color: #fff; }
   .at-item.muted { color: #9d9d9d; cursor: default; }
+  .slash-popup {
+    position: absolute; left: 8px; right: 8px; z-index: 25;
+    background: #2a2a2a; border: 1px solid #3a3a3a;
+    border-radius: 10px; max-height: 280px; overflow-y: auto;
+    padding: 4px; box-shadow: 0 10px 28px rgba(0,0,0,.45);
+  }
+  .slash-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px; border-radius: 6px; cursor: pointer;
+    font-size: 13px; color: #f3f3f3;
+  }
+  .slash-item.active { background: #3a3a3a; }
+  .slash-ico { color: #8a8a8a; width: 14px; flex-shrink: 0; font-size: 14px; line-height: 1; }
+  .slash-cmd { font-weight: 600; flex-shrink: 0; }
+  .slash-desc {
+    margin-left: auto; min-width: 0; padding-left: 12px;
+    color: #8d8d8d; font-size: 12px; font-weight: 400;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .slash-item.muted { color: #8d8d8d; cursor: default; justify-content: center; }
   .composer {
     margin: 8px 10px 10px;
     border: 1px solid #3b82f6; border-radius: 12px;
@@ -537,6 +579,7 @@ function getWebviewHtml(): string {
     <div class="composer-wrap">
     <div id="modelMenu" class="model-menu hidden" role="listbox"></div>
     <div id="atPopup" class="at-popup hidden"></div>
+    <div id="slashPopup" class="slash-popup hidden"></div>
     <div id="composer" class="composer">
       <div id="banner" class="banner">
         <span class="banner-text">本地运行的编程助手，用 @ 引用文件，Enter 发送</span>
@@ -1056,10 +1099,19 @@ function getWebviewHtml(): string {
   function send() {
     const content = input.value.trim();
     if (!content) return;
+    hideSlashPopup();
+    // slash 命令：以 / 开头 → 本地处理，不发模型
+    if (handleSlash(content)) {
+      input.value = '';
+      syncSend();
+      return;
+    }
     addBubble('user', content);
     touchTitle(content);
     assistant = null;
     assistantText = '';
+    reasoningEl = null;
+    reasoningText = '';
     setStatus('思考中…');
     setBusy(true);
     input.value = '';
@@ -1067,10 +1119,164 @@ function getWebviewHtml(): string {
     vscode.postMessage({ type: 'send', content });
   }
 
-  // ---------- @ 引用文件（输入框触发） ----------
+  // ---------- slash 命令 ----------
+  const SLASH_COMMANDS = [
+    { cmd: '/help', desc: '查看可用命令' },
+    { cmd: '/new', desc: '新建会话' },
+    { cmd: '/resume', desc: '恢复历史会话' },
+    { cmd: '/clear', desc: '清空当前对话' },
+    { cmd: '/model', desc: '切换模型' },
+    { cmd: '/mode', desc: '切换权限模式 manual / auto / plan', needsArg: true },
+    { cmd: '/effort', desc: '切换思考程度 none / low / high / max', needsArg: true },
+    { cmd: '/cost', desc: '查看本次会话 token 用量' },
+  ];
+  const SLASH_HELP = SLASH_COMMANDS.map(function (c) {
+    return c.cmd + '  ' + c.desc;
+  }).join('\\n');
+  let sessionTokens = 0;
+
+  function handleSlash(content) {
+    const t = content.trim();
+    if (!t.startsWith('/')) return false;
+    const parts = t.split(/\\s+/);
+    const cmd = parts[0].toLowerCase();
+    const arg = parts.slice(1).join(' ');
+
+    if (cmd === '/help') {
+      addBubble('assistant', '### 可用命令\\n\`\`\`\\n' + SLASH_HELP + '\\n\`\`\`');
+    } else if (cmd === '/new') {
+      vscode.postMessage({ type: 'newSession' });
+    } else if (cmd === '/resume') {
+      showHistory();
+    } else if (cmd === '/clear') {
+      messages.innerHTML = '';
+      assistant = null; assistantText = '';
+      reasoningEl = null; reasoningText = '';
+      syncEmpty();
+    } else if (cmd === '/model') {
+      vscode.postMessage({ type: 'pickModel' });
+    } else if (cmd === '/mode') {
+      const m = arg.toLowerCase();
+      if (m === 'manual' || m === 'auto' || m === 'plan') {
+        vscode.postMessage({ type: 'setMode', mode: m });
+      } else {
+        addBubble('assistant', '用法：/mode manual | auto | plan');
+      }
+    } else if (cmd === '/effort') {
+      const e = arg.toLowerCase();
+      if (e === 'none' || e === 'low' || e === 'high' || e === 'max') {
+        currentEffort = e;
+        renderEffort();
+        vscode.postMessage({ type: 'setEffort', effort: e });
+      } else {
+        addBubble('assistant', '用法：/effort none | low | high | max');
+      }
+    } else if (cmd === '/cost') {
+      addBubble('assistant', '本次会话累计约 ' + sessionTokens + ' tokens');
+    } else {
+      addBubble('assistant', '未知命令：' + cmd + '。输入 /help 查看可用命令');
+    }
+    return true;
+  }
+
+  // ---------- @ 引用文件 / slash 命令（输入框触发） ----------
   const atPopup = document.getElementById('atPopup');
+  const slashPopup = document.getElementById('slashPopup');
   let atState = null; // { start, token, items, index }
   let atDebounce = null;
+  let slashState = null; // { start, token, items, index }
+
+  function updateInputPopups() {
+    const pos = input.selectionStart ?? input.value.length;
+    const before = input.value.slice(0, pos);
+    const slash = /(?:^|\\s)(\\/[^\\s]*)$/.exec(before);
+    if (slash) {
+      hideAtPopup();
+      const token = slash[1];
+      const start = pos - token.length;
+      const q = token.slice(1).toLowerCase();
+      const items = SLASH_COMMANDS.filter(function (c) {
+        return !q || c.cmd.slice(1).toLowerCase().indexOf(q) === 0;
+      });
+      slashState = { start: start, token: token, items: items, index: 0 };
+      renderSlashList();
+      return;
+    }
+    hideSlashPopup();
+    updateAtPopup();
+  }
+
+  function renderSlashList() {
+    if (!slashState) return;
+    slashPopup.innerHTML = '';
+    if (!slashState.items.length) {
+      slashPopup.innerHTML = '<div class="slash-item muted">无匹配命令</div>';
+    } else {
+      slashState.items.forEach(function (c, i) {
+        const it = document.createElement('div');
+        it.className = 'slash-item' + (i === slashState.index ? ' active' : '');
+        const ico = document.createElement('span');
+        ico.className = 'slash-ico';
+        ico.textContent = '›';
+        const name = document.createElement('span');
+        name.className = 'slash-cmd';
+        name.textContent = c.cmd;
+        const desc = document.createElement('span');
+        desc.className = 'slash-desc';
+        desc.textContent = c.desc;
+        it.appendChild(ico);
+        it.appendChild(name);
+        it.appendChild(desc);
+        it.addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          selectSlash(i);
+        });
+        slashPopup.appendChild(it);
+      });
+    }
+    const wrap = document.querySelector('.composer-wrap');
+    const inputRect = input.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+    slashPopup.style.bottom = (wrapRect.bottom - inputRect.top + 4) + 'px';
+    slashPopup.classList.remove('hidden');
+    const active = slashPopup.querySelector('.slash-item.active');
+    if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
+  }
+
+  function highlightSlash() {
+    const items = slashPopup.querySelectorAll('.slash-item');
+    for (let i = 0; i < items.length; i++) {
+      items[i].className = 'slash-item' + (i === slashState.index ? ' active' : '');
+    }
+  }
+
+  function selectSlash(i) {
+    if (!slashState || !slashState.items.length) return;
+    const item = slashState.items[i];
+    const end = slashState.start + slashState.token.length;
+    if (item.needsArg) {
+      const next = input.value.slice(0, slashState.start) + item.cmd + ' ' + input.value.slice(end);
+      input.value = next;
+      const caret = slashState.start + item.cmd.length + 1;
+      input.focus();
+      input.selectionStart = input.selectionEnd = caret;
+      hideSlashPopup();
+      syncSend();
+      return;
+    }
+    const rest = input.value.slice(end);
+    input.value = rest.trim() ? item.cmd + ' ' + rest.replace(/^\\s+/, '') : '';
+    hideSlashPopup();
+    handleSlash(item.cmd);
+    syncSend();
+    input.focus();
+  }
+
+  function hideSlashPopup() {
+    slashState = null;
+    slashPopup.classList.add('hidden');
+    slashPopup.innerHTML = '';
+  }
 
   function updateAtPopup() {
     const input = document.getElementById('input');
@@ -1293,12 +1499,15 @@ function getWebviewHtml(): string {
         const usage = evt.payload.usage || {};
         const prompt = usage.promptTokens || 0;
         const total = prompt + (usage.completionTokens || 0);
+        sessionTokens += total;
         const pct = prompt ? Math.min(100, Math.round(prompt / 128000 * 100)) : 0;
         setUsagePct(pct, total ? ('本轮约 ' + total + ' tokens') : '');
         setBusy(false);
         setStatus('✓ 完成');
         assistant = null;
         assistantText = '';
+        reasoningEl = null;
+        reasoningText = '';
         break;
       }
     }
@@ -1319,9 +1528,12 @@ function getWebviewHtml(): string {
   });
   document.addEventListener('click', (e) => {
     const menu = document.getElementById('modelMenu');
-    if (menu.classList.contains('hidden')) return;
-    if (e.target.closest && e.target.closest('#modelMenu')) return;
-    hideModelMenu();
+    if (!menu.classList.contains('hidden') && !(e.target.closest && e.target.closest('#modelMenu'))) {
+      hideModelMenu();
+    }
+    if (slashState && !(e.target.closest && (e.target.closest('#slashPopup') || e.target.closest('#input')))) {
+      hideSlashPopup();
+    }
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') hideModelMenu();
@@ -1381,8 +1593,14 @@ function getWebviewHtml(): string {
   });
   document.getElementById('refreshCtx').addEventListener('click', () => vscode.postMessage({ type: 'refreshContext' }));
   // 输入框：@ 触发文件引用浮层
-  input.addEventListener('input', () => { updateAtPopup(); syncSend(); });
+  input.addEventListener('input', () => { updateInputPopups(); syncSend(); });
   input.addEventListener('keydown', (e) => {
+    if (slashState && slashState.items.length) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); slashState.index = (slashState.index + 1) % slashState.items.length; highlightSlash(); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); slashState.index = (slashState.index - 1 + slashState.items.length) % slashState.items.length; highlightSlash(); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); selectSlash(slashState.index); return; }
+      if (e.key === 'Escape') { e.preventDefault(); hideSlashPopup(); return; }
+    }
     if (atState && atState.items.length) {
       if (e.key === 'ArrowDown') { e.preventDefault(); atState.index = (atState.index + 1) % atState.items.length; highlightAt(); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); atState.index = (atState.index - 1 + atState.items.length) % atState.items.length; highlightAt(); return; }
