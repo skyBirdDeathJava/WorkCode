@@ -148,22 +148,22 @@ def make_app(settings: Settings) -> FastAPI:
                     editor_ctx = payload.get("editorContext") or {}
                     loop = build_loop()
                     task = asyncio.create_task(loop.run(session, content, editor_ctx, emit))
-
+                #弹权限框 ──▶ 用户点允许/拒绝
                 elif kind == "permission_response":
                     gateway.resolve(payload.get("requestId", ""), bool(payload.get("allowed", False)))
-
+                #用户在Diff 确认框点了「接受修改 / 拒绝」。
                 elif kind == "apply_diff":
                     gateway.resolve_diff(payload.get("requestId", ""), bool(payload.get("accepted", False)))
-
+                #扩展在 VS Code 终端执行完命令后回传结果：Agent 想跑命令（非交互、走终端桥）
                 elif kind == "terminal_exec_result":
                     gateway.resolve_terminal(payload.get("requestId", ""), payload)
-
+                # 用户请求历史会话列表
                 elif kind == "list_sessions":
                     await emit(
                         "session_list",
                         {"requestId": payload.get("requestId", ""), "sessions": store.list_sessions(20)},
                     )
-
+                # 在会话列表点击某个历史会话时
                 elif kind == "resume_session":
                     loaded = store.load(payload.get("sessionId", ""))
                     if loaded is not None:

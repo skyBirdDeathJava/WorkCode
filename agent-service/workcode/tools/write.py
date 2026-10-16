@@ -44,6 +44,49 @@ def preview_edit_file(
     return (True, text, new, "")
 
 
+def preview_apply_patch(
+    changes: list[dict],
+) -> tuple[bool, list[tuple[str, str, str]], str]:
+    """批量精确替换多个文件（不落盘）。返回 (ok, [(path, original, new), ...], error)。"""
+    staged: list[tuple[str, str, str]] = []
+    for ch in changes:
+        path = ch.get("path", "")
+        old = ch.get("oldText", "")
+        new = ch.get("newText", "")
+        p = Path(path)
+        if not p.is_file():
+            return False, [], f"文件不存在: {path}"
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            return False, [], f"读取失败: {path}: {e}"
+        if not old:
+            return False, [], f"{path} 的 oldText 不能为空"
+        count = text.count(old)
+        if count == 0:
+            return False, [], f"未找到要替换的文本: {old[:50]}（于 {path}）"
+        if count > 1 and not ch.get("replaceAll"):
+            return False, [], f"{path} 中 oldText 出现 {count} 次，需更精确或 replaceAll=true"
+        new_text = text.replace(old, new) if ch.get("replaceAll") else text.replace(old, new, 1)
+        staged.append((path, text, new_text))
+    return True, staged, ""
+
+
+def apply_apply_patch(changes: list[dict]) -> tuple[bool, str]:
+    """把批量替换真正落盘（假设已通过 preview 校验）。"""
+    for ch in changes:
+        path = ch.get("path", "")
+        old = ch.get("oldText", "")
+        new = ch.get("newText", "")
+        p = Path(path)
+        if not p.is_file():
+            return False, f"文件不存在: {path}"
+        text = p.read_text(encoding="utf-8", errors="replace")
+        new_text = text.replace(old, new) if ch.get("replaceAll") else text.replace(old, new, 1)
+        p.write_text(new_text, encoding="utf-8")
+    return True, f"已批量修改 {len(changes)} 个文件"
+
+
 def write_file(path: str, content: str) -> tuple[bool, str]:
     """写入文件（新建或覆盖）。"""
     p = Path(path)

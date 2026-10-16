@@ -64,6 +64,40 @@ async def test_write_file_creates_and_overwrites() -> None:
     assert "覆盖" in out
 
 
+def test_apply_patch_preview_and_apply(tmp_path: Path) -> None:
+    from workcode.tools.write import apply_apply_patch, preview_apply_patch
+
+    a = tmp_path / "a.py"
+    b = tmp_path / "b.py"
+    a.write_text("x = 1\n", encoding="utf-8")
+    b.write_text("y = 2\n", encoding="utf-8")
+
+    changes = [
+        {"path": str(a), "oldText": "x = 1", "newText": "x = 100"},
+        {"path": str(b), "oldText": "y = 2", "newText": "y = 200"},
+    ]
+    ok, staged, err = preview_apply_patch(changes)
+    assert ok and not err
+    assert len(staged) == 2
+    # 预览不落盘
+    assert a.read_text(encoding="utf-8") == "x = 1\n"
+
+    ok, out = apply_apply_patch(changes)
+    assert ok
+    assert a.read_text(encoding="utf-8") == "x = 100\n"
+    assert b.read_text(encoding="utf-8") == "y = 200\n"
+
+
+def test_apply_patch_missing_old_text(tmp_path: Path) -> None:
+    from workcode.tools.write import preview_apply_patch
+
+    a = tmp_path / "a.py"
+    a.write_text("x = 1\n", encoding="utf-8")
+    ok, staged, err = preview_apply_patch([{"path": str(a), "oldText": "zzz", "newText": "y"}])
+    assert not ok
+    assert "未找到" in err
+
+
 @pytest.mark.asyncio
 async def test_edit_file_exact_replace() -> None:
     registry = build_registry()

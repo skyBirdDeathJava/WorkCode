@@ -23,7 +23,7 @@ docs/              需求文档、技术方案、实施计划
 |------|------|
 | AI 对话 | 结构化 Markdown 输出，上下文栏显示当前文件 + 选中行号 |
 | 读代码 | read_file / list_directory / search_files，解释选中代码 |
-| 改代码 | write_file / edit_file，**Diff 预览 → 聊天面板确认 → 落盘** |
+| 改代码 | write_file / edit_file / **apply_patch（多文件批量）**，Diff 预览 → 确认 → 落盘，可选 git 自动 commit |
 | 跑命令 | run_command 在 **VS Code 集成终端**执行，长驻进程（npm run dev）不超时 |
 | Web | web_search（Bing→DDG→Wikipedia 回退）+ web_fetch（SSRF 防护） |
 | 权限模式 | **Manual / Auto / Plan**，底部工具栏切换；危险命令硬拦 |
@@ -106,6 +106,7 @@ curl http://127.0.0.1:4877/healthz     # 健康检查
 | `WORKCODE_MAX_CONTEXT_TOKENS` | `16000` | 上下文预算，超限自动压缩 |
 | `WORKCODE_SESSION_DIR` | `~/.workcode/sessions` | 会话存储目录 |
 | `WORKCODE_MEMORY_FILE` | `~/.workcode/memory.md` | 跨项目用户记忆文件 |
+| `WORKCODE_AUTO_COMMIT` | `0` | 编辑落盘后自动 `git add`+`commit`（只提交被改文件） |
 
 ## 里程碑状态
 

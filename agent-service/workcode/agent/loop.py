@@ -347,12 +347,41 @@ class AgentLoop:
         return (ok, output)
 
     async def _handle_write_with_diff(self, name: str, args: dict[str, Any], emit: Emit) -> tuple[bool, str]:
-        """写操作：先暂存并展示 Diff，用户接受后才落盘。"""
+        """写操作：先暂存并展示 Diff，用户接受后才落盘。apply_patch 支持多文件一次确认。"""
+        request_id = f"diff_{uuid.uuid4().hex[:8]}"
+
+        if name == "apply_patch":
+            changes = args.get("changes", [])
+            if not isinstance(changes, list) or not changes:
+                return False, "apply_patch 需要非空的 changes 数组"
+            ok, staged, error = write_tools.preview_apply_patch(changes)
+            if not ok:
+                return False, error
+            # 合并成一个 Diff 预览（按文件分节）
+            parts_orig = [f"=== {path} ===\n{original}" for path, original, _ in staged]
+            parts_new = [f"=== {path} ===\n{new}" for path, _, new in staged]
+            await emit(
+                "diff_preview",
+                {
+                    "requestId": request_id,
+                    "path": f"📦 批量修改 {len(staged)} 个文件",
+                    "originalContent": "\n\n".join(parts_orig),
+                    "newContent": "\n\n".join(parts_new),
+                },
+            )
+            accepted = await self.gateway.wait_for_diff(
+                request_id, timeout=self.settings.diff_timeout_seconds
+            )
+            if not accepted:
+                return False, "用户未接受该修改（Diff 被拒绝或超时）"
+            ok, output = write_tools.apply_apply_patch(changes)
+            if ok and self.settings.auto_commit:
+                await self._auto_commit(name, args)
+            return ok, output
+
         ok, original, new, error = self._preview_change(name, args)
         if not ok:
             return False, error
-
-        request_id = f"diff_{uuid.uuid4().hex[:8]}"
         await emit(
             "diff_preview",
             {
@@ -368,7 +397,39 @@ class AgentLoop:
         if not accepted:
             return False, "用户未接受该修改（Diff 被拒绝或超时）"
         # 用户接受 → 真正落盘
-        return await self.registry.execute(name, args)
+        ok, output = await self.registry.execute(name, args)
+        if ok and self.settings.auto_commit:
+            await self._auto_commit(name, args)
+        return ok, output
+
+    async def _auto_commit(self, name: str, args: dict[str, Any]) -> None:
+        """编辑落盘后自动 git add + commit（只提交被改的文件）。默认关闭，WORKCODE_AUTO_COMMIT=1 开启。"""
+        root = self._workspace_root
+        if not root:
+            return
+        paths: list[str] = []
+        if name == "apply_patch":
+            paths = [c.get("path", "") for c in args.get("changes", []) if c.get("path")]
+        else:
+            p = args.get("path", "")
+            if p:
+                paths = [p]
+        if not paths:
+            return
+        try:
+            add = await asyncio.create_subprocess_exec(
+                "git", "-C", root, "add", "--", *paths,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            await add.communicate()
+            msg = f"WorkCode: 修改 {', '.join(paths[:3])}"
+            commit = await asyncio.create_subprocess_exec(
+                "git", "-C", root, "commit", "-m", msg,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            await commit.communicate()
+        except Exception:  # noqa: BLE001 — 自动 commit 是尽力而为
+            pass
 
     @staticmethod
     def _preview_change(name: str, args: dict[str, Any]) -> tuple[bool, str, str, str]:

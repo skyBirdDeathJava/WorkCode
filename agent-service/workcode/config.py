@@ -47,6 +47,9 @@ class Settings:
             str(Path.home() / ".workcode" / "memory.md"),
         )
     )
+    auto_commit: bool = field(
+        default_factory=lambda: _env_bool("WORKCODE_AUTO_COMMIT")
+    )
     # 单条消息内模型连续工具调用的步数上限即单轮对话的 Agent 循环次数（实际无限，默认 10000；真死循环由重复调用检测兜底）
     max_steps: int = field(
         default_factory=lambda: int(os.environ.get("WORKCODE_MAX_STEPS", "10000"))

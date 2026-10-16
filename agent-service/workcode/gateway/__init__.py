@@ -23,7 +23,7 @@ DANGEROUS_CMD_PATTERNS = [
 ]
 
 READ_TOOLS = {"read_file", "list_directory", "search_files"}
-WRITE_TOOLS: set[str] = {"write_file", "edit_file"}
+WRITE_TOOLS: set[str] = {"write_file", "edit_file", "apply_patch"}
 COMMAND_TOOL = "run_command"
 
 # 安全只读/构建/测试命令：匹配前缀自动 allow（不弹确认）

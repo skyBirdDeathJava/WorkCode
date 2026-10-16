@@ -79,7 +79,7 @@ class SessionStore:
                 elif t == "message" and session is not None:
                     session.messages.append(obj.get("message", {}))
                 elif t == "summary" and session is not None:
-                    # 摘要作为 system 消息参与上下文；旧消息会被优先裁剪，摘要存活
+                    # 历史对话摘要作为 system 消息参与上下文；旧消息会被优先裁剪，摘要存活
                     session.messages.append(
                         {"role": "system", "content": SUMMARY_PREFIX + obj.get("content", "")}
                     )
@@ -88,13 +88,13 @@ class SessionStore:
         if session is None:
             session = Session(id=session_id, created_at=0.0)
         return session
-
+    # 历史会话列表：每个会话只返回「第一条用户消息」作为预览，点击某个会话后再 load 全部消息。
     def list_sessions(self, limit: int = 20) -> list[dict]:
         """按创建时间倒序列出会话：id、created_at、首条用户消息预览。"""
         items: list[dict] = []
         for path in self.dir.glob("*.jsonl"):
             try:
-                meta, preview = None, ""
+                meta, preview = None, "" #meta（id、创建时间）+ 第一条用户消息（预览）
                 for line in path.read_text(encoding="utf-8").splitlines():
                     if not line.strip():
                         continue

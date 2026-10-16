@@ -126,6 +126,37 @@ def build_registry() -> ToolRegistry:
 
     r.register(
         ToolDef(
+            name="apply_patch",
+            description=(
+                "一次对多个文件做精确替换（批量修改）。changes 是数组，每项含 "
+                "path / oldText / newText（可选 replaceAll）。所有改动会合并成一个确认。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "changes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "文件路径"},
+                                "oldText": {"type": "string", "description": "要被替换的原文（必须精确匹配）"},
+                                "newText": {"type": "string", "description": "替换后的新文本"},
+                                "replaceAll": {"type": "boolean", "description": "出现多次时是否全部替换"},
+                            },
+                            "required": ["path", "oldText", "newText"],
+                        },
+                        "description": "多个文件的精确替换",
+                    }
+                },
+                "required": ["changes"],
+            },
+            handler=write.apply_apply_patch,
+        )
+    )
+
+    r.register(
+        ToolDef(
             name="run_command",
             description=(
                 "在长驻终端会话里执行命令（shell，测试、构建、版本控制等）。"
