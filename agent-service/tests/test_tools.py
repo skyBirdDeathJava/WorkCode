@@ -184,6 +184,18 @@ def test_gateway_command_blacklist() -> None:
     assert g.decide("run_command", {"command": "uptime"}, "/") == "ask"
 
 
+def test_gateway_allowed_commands() -> None:
+    g = Gateway()
+    g.allowed_commands = ["npm test", "pytest"]
+    # 预批准命令任何模式都 allow
+    assert g.decide("run_command", {"command": "npm test"}, "/", mode="manual") == "allow"
+    assert g.decide("run_command", {"command": "npm test --watch"}, "/", mode="plan") == "allow"
+    # 未预批准 → manual 需确认
+    assert g.decide("run_command", {"command": "uptime"}, "/", mode="manual") == "ask"
+    # 危险命令即使预批准前缀也不放行
+    assert g.decide("run_command", {"command": "sudo npm test"}, "/", mode="manual") == "deny"
+
+
 def test_gateway_auto_mode_allows_safe_commands() -> None:
     g = Gateway()
     # 非白名单但非危险的命令：Auto 模式自动执行，Manual 需确认

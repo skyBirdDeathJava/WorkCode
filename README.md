@@ -92,6 +92,7 @@ curl http://127.0.0.1:4877/healthz     # 健康检查
 | `workcode.pythonPath` | `""` | 留空自动检测 |
 | `workcode.serviceDir` | `""` | agent-service 目录，留空按插件路径推导 |
 | `workcode.mock` | `false` | Mock 模式，免 Key 验证链路 |
+| `workcode.allowedCommands` | `[]` | 预批准命令前缀，匹配则不再弹确认（可用 `/allow` 添加） |
 
 ## 环境变量（Python 服务）
 

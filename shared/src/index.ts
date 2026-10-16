@@ -21,6 +21,7 @@ export type ClientMessageType =
   | 'set_effort'
   | 'get_memory'
   | 'memory_add'
+  | 'set_allowed'
   | 'cancel'
   | 'new_session';
 
@@ -71,6 +72,8 @@ export interface ConnectPayload {
   workspaceRoot?: string;
   /** 插件是否支持在 VS Code 集成终端里执行命令（run_command 桥） */
   terminalSupport?: boolean;
+  /** 预批准命令前缀：匹配则不弹确认直接执行 */
+  allowedCommands?: string[];
 }
 
 export interface ChatRequestPayload {

@@ -1,3 +1,4 @@
+import * as child_process from 'child_process';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { DiffPreviewPayload, TerminalExecPayload } from '@workcode/shared';
@@ -68,6 +69,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         case 'memoryAdd':
           void this.addMemory(String(msg.text ?? ''));
+          break;
+        case 'shellEscape':
+          this.runShellEscape(String(msg.command ?? ''));
+          break;
+        case 'allowCommand':
+          void this.addAllowCommand(String(msg.command ?? ''));
           break;
         case 'pickModel':
           void this.pickModel();
@@ -182,6 +189,42 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       ignoreFocusOut: true,
     });
     if (model) await this.applyModel(model);
+  }
+
+  /** `!` shell 逃逸：用户以 ! 开头输入的命令，直接在扩展里执行并回显结果。 */
+  private runShellEscape(command: string): void {
+    if (!command.trim()) return;
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    child_process.exec(
+      command,
+      { cwd, timeout: 30_000, maxBuffer: 1024 * 1024 },
+      (err, stdout, stderr) => {
+        const output = (stdout + (stderr ? '\n' + stderr : '')).trim();
+        void this.view?.webview.postMessage({
+          type: 'shellResult',
+          ok: !err,
+          command,
+          output: output || (err ? String(err) : '(无输出)'),
+        });
+      }
+    );
+  }
+
+  /** /allow 命令：把命令前缀加入预批准白名单并同步服务端。 */
+  private async addAllowCommand(command: string): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration('workcode');
+    const list = cfg.get<string[]>('allowedCommands', []);
+    if (!list.includes(command)) {
+      list.push(command);
+      await cfg.update('allowedCommands', list, true);
+    }
+    this.client.setAllowedCommands(list);
+    void this.view?.webview.postMessage({
+      type: 'shellResult',
+      ok: true,
+      command: '/allow ' + command,
+      output: '已预批准：' + command + '\n（此后匹配该前缀的命令不再弹确认）',
+    });
   }
 
   /** 读取用户记忆并回推给 Webview。 */
@@ -324,6 +367,11 @@ function getWebviewHtml(): string {
     background: #3a3a3a22; border-left: 3px solid #9d9d9d66;
     padding: 4px 8px; border-radius: 4px; margin-bottom: 6px;
     white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow-y: auto;
+  }
+  .bubble.shell {
+    font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px;
+    background: #161616; border: 1px solid #333;
+    white-space: pre-wrap; word-break: break-all;
   }
   .bubble.user {
     background: #2a2d31; border-radius: 12px;
@@ -1124,6 +1172,15 @@ function getWebviewHtml(): string {
       syncSend();
       return;
     }
+    // ! 逃逸：以 ! 开头 → 直接执行命令，不发给模型
+    if (content.startsWith('!')) {
+      addBubble('user', content);
+      vscode.postMessage({ type: 'shellEscape', command: content.slice(1).trim() });
+      setStatus('执行命令…');
+      input.value = '';
+      syncSend();
+      return;
+    }
     addBubble('user', content);
     touchTitle(content);
     assistant = null;
@@ -1147,6 +1204,7 @@ function getWebviewHtml(): string {
     { cmd: '/mode', desc: '切换权限模式 manual / auto / plan', needsArg: true },
     { cmd: '/effort', desc: '切换思考程度 none / low / high / max', needsArg: true },
     { cmd: '/memory', desc: '查看 / 追加跨项目用户记忆，如 /memory 我喜欢用单引号' },
+    { cmd: '/allow', desc: '预批准命令前缀，如 /allow npm test（匹配后不再确认）', needsArg: true },
     { cmd: '/cost', desc: '查看本次会话 token 用量' },
   ];
   const SLASH_HELP = SLASH_COMMANDS.map(function (c) {
@@ -1157,6 +1215,8 @@ function getWebviewHtml(): string {
   function handleSlash(content) {
     const t = content.trim();
     if (!t.startsWith('/')) return false;
+    // ! 逃逸：以 ! 开头的消息不进 handleSlash，由 send() 里处理
+    if (t.startsWith('!')) return false;
     const parts = t.split(/\\s+/);
     const cmd = parts[0].toLowerCase();
     const arg = parts.slice(1).join(' ');
@@ -1196,6 +1256,13 @@ function getWebviewHtml(): string {
         vscode.postMessage({ type: 'memoryAdd', text });
       } else {
         vscode.postMessage({ type: 'memoryGet' });
+      }
+    } else if (cmd === '/allow') {
+      const c = arg.trim();
+      if (c) {
+        vscode.postMessage({ type: 'allowCommand', command: c });
+      } else {
+        addBubble('assistant', '用法：/allow <命令前缀>，如 /allow npm test');
       }
     } else if (cmd === '/cost') {
       addBubble('assistant', '本次会话累计约 ' + sessionTokens + ' tokens');
@@ -1451,6 +1518,23 @@ function getWebviewHtml(): string {
     if (msg.type === 'memoryContent') {
       const content = msg.content || '';
       addBubble('assistant', '### 用户记忆 (memory.md)\\n\`\`\`\\n' + (content || '(空)') + '\\n\`\`\`');
+      return;
+    }
+    if (msg.type === 'shellResult') {
+      const wrap = document.createElement('div');
+      wrap.className = 'msg';
+      const role = document.createElement('div');
+      role.className = 'role';
+      role.textContent = msg.ok ? 'Shell' : 'Shell ✗';
+      const b = document.createElement('div');
+      b.className = 'bubble shell';
+      b.textContent = '$ ' + (msg.command || '') + '\\n' + (msg.output || '(无输出)');
+      wrap.appendChild(role);
+      wrap.appendChild(b);
+      messages.appendChild(wrap);
+      messages.scrollTop = messages.scrollHeight;
+      syncEmpty();
+      setStatus('执行完毕');
       return;
     }
     if (msg.type === 'context') {

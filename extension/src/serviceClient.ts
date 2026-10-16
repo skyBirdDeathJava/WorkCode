@@ -81,6 +81,11 @@ export class ServiceClient extends vscode.Disposable {
     this.send('set_effort', { effort });
   }
 
+  /** 更新预批准命令前缀（匹配则不确认直接执行）。 */
+  setAllowedCommands(commands: string[]): void {
+    this.send('set_allowed', { commands });
+  }
+
   /** 读取/追加跨项目用户记忆（~/.workcode/memory.md）。 */
   async getMemory(): Promise<string | undefined> {
     const resp = await this.request('get_memory', {});
@@ -205,6 +210,7 @@ export class ServiceClient extends vscode.Disposable {
           model: cfg.get<string>('model', 'deepseek/deepseek-chat'),
           workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
           terminalSupport: true,
+          allowedCommands: cfg.get<string[]>('allowedCommands', []),
         },
       })
     );

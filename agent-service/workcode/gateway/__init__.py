@@ -60,6 +60,7 @@ class Gateway:
         self._pending: dict[str, asyncio.Future] = {}
         self._diff_pending: dict[str, asyncio.Future] = {}
         self._terminal_pending: dict[str, asyncio.Future] = {}
+        self.allowed_commands: list[str] = []  # 预批准命令前缀，匹配则不确认
 
     def decide(self, tool: str, args: dict, workspace_root: str, mode: str = "manual") -> str:
         if tool in READ_TOOLS:
@@ -74,6 +75,9 @@ class Gateway:
                 return "deny"
             stripped = cmd.strip().lower()
             if any(stripped.startswith(prefix) for prefix in SAFE_COMMAND_PREFIXES):
+                return "allow"
+            # 预批准命令（用户配置）：匹配前缀直接 allow，任何模式都不弹确认
+            if any(stripped.startswith(p.lower().strip()) for p in self.allowed_commands if p.strip()):
                 return "allow"
             # Auto 模式：非危险命令自动执行；Manual/Plan 仍需确认
             if mode == "auto":

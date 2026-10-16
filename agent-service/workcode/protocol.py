@@ -40,6 +40,11 @@ class ConnectPayload(BaseModel):
     model: Optional[str] = None
     workspaceRoot: Optional[str] = None
     terminalSupport: Optional[bool] = None
+    allowedCommands: Optional[list[str]] = None
+
+
+class SetAllowedPayload(BaseModel):
+    commands: list[str] = Field(default_factory=list)
 
 
 class ChatRequestPayload(BaseModel):
@@ -196,6 +201,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "set_effort": SetEffortPayload,
     "get_memory": GetMemoryPayload,
     "memory_add": MemoryAddPayload,
+    "set_allowed": SetAllowedPayload,
     "memory_content": MemoryContentPayload,
     "ready": ReadyPayload,
     "session_started": SessionStartedPayload,

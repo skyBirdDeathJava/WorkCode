@@ -76,7 +76,7 @@ def make_app(settings: Settings) -> FastAPI:
 
         try:
             while True:
-                raw = await websocket.receive_text()
+                raw = await websocket.receive_text() #反复收同一条连接上的消息
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
@@ -93,6 +93,8 @@ def make_app(settings: Settings) -> FastAPI:
                         model_name = payload["model"]
                     if payload.get("terminalSupport"):
                         terminal_supported = True
+                    if isinstance(payload.get("allowedCommands"), list):
+                        gateway.allowed_commands = [str(c) for c in payload["allowedCommands"]]
                     await emit(
                         "ready",
                         {
@@ -102,6 +104,20 @@ def make_app(settings: Settings) -> FastAPI:
                             "mode": mode,
                         },
                     )
+
+                elif kind == "set_allowed":
+                    cmds = payload.get("commands", [])
+                    if isinstance(cmds, list):
+                        gateway.allowed_commands = [str(c) for c in cmds]
+                        await emit(
+                            "ready",
+                            {
+                                "ok": True,
+                                "message": f"预批准命令已更新（{len(gateway.allowed_commands)} 条）",
+                                "model": model_name,
+                                "mode": mode,
+                            },
+                        )
 
                 elif kind == "set_mode":
                     new_mode = payload.get("mode", "")
