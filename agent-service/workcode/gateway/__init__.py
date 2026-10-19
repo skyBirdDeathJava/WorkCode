@@ -69,6 +69,8 @@ class Gateway:
             return "allow"  # 只读外部搜索
         if tool == "web_fetch":
             return "ask"  # 网络抓取需确认（工具内还有 SSRF 防护）
+        if tool == "task":
+            return "ask"  # 派生子 Agent 需用户确认
         if tool == COMMAND_TOOL:
             cmd = args.get("command", "")
             if any(re.search(p, cmd) for p in DANGEROUS_CMD_PATTERNS):

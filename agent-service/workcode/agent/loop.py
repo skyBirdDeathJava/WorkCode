@@ -9,12 +9,12 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Optional
 
 from ..config import Settings
 from ..gateway import Gateway
 from ..session.store import Session, SessionStore
-from ..tools import write as write_tools
+from ..tools import build_registry, write as write_tools
 from ..tools.cmd import TerminalSession
 from ..tools.registry import ToolRegistry
 from . import context
@@ -106,7 +106,7 @@ class AgentLoop:
         content: str,
         editor_ctx: Any,
         emit: Emit,
-    ) -> None:
+    ) -> Optional[str]:
         if isinstance(editor_ctx, dict):
             self._workspace_root = editor_ctx.get("workspaceRoot", "")
         else:
@@ -127,9 +127,10 @@ class AgentLoop:
             extras.append(f"【Git 状态】\n{git_ctx}")
         extra_system = "\n\n".join(extras)
 
-        # 死循环检测状态
+        # 死循环检测状态 + 是否因错误提前停止
         last_sig: tuple = ()
         repeat_count = 0
+        aborted = False
 
         for step in range(self.settings.max_steps):
             # messages 包含用户消息（包含引用文件等）+历史对话+系统提示词
@@ -158,10 +159,12 @@ class AgentLoop:
                 await emit("error", {"message": "已取消"})
                 return
             except asyncio.TimeoutError:
+                aborted = True
                 await emit("error", {"message": "模型响应超时"})
                 break
             except Exception as e:  # noqa: BLE001 — 需要兜底并把原因反馈给用户
                 logger.exception("model stream failed")
+                aborted = True
                 await emit("error", {"message": f"模型调用失败：{e}"})
                 break
 
@@ -177,6 +180,7 @@ class AgentLoop:
                     repeat_count = 0
                 last_sig = sig
                 if repeat_count >= 3:
+                    aborted = True
                     await emit(
                         "error",
                         {"message": "模型在重复调用相同的工具且没有进展，为避免浪费已停止。你可以换个说法再试。"},
@@ -193,21 +197,24 @@ class AgentLoop:
             if result.text: #本次agent循环调用大模型返回了答案文本，最终答案，因为如果不是最终答案，模型会返回工具调用，工具调用时没有content的
                 self._append_message(session, {"role": "assistant", "content": result.text})
                 await emit("done", {"usage": dict(self._usage)})
-                return
+                return result.text
 
             # 既无文本也无工具调用：异常情况
+            aborted = True
             await emit("error", {"message": "模型未返回任何内容，已停止"})
             break
 
-        await emit(
-            "error",
-            {
-                "message": (
-                    f"这一轮的工具调用步骤已达上限（{self.settings.max_steps} 步），"
-                    "为避免死循环已停止。你可以继续追问，会话轮数不设限。"
-                )
-            },
-        )
+        # 只有真的跑满步数才报「已达上限」；出错/死循环停止不报（避免误导）
+        if not aborted:
+            await emit(
+                "error",
+                {
+                    "message": (
+                        f"这一轮的工具调用步骤已达上限（{self.settings.max_steps} 步），"
+                        "为避免死循环已停止。你可以继续追问，会话轮数不设限。"
+                    )
+                },
+            )
 
     def _append_message(self, session: Session, message: dict) -> None:
         """追加一条消息：写进会话内存 + 逐条落盘 JSONL。"""
@@ -309,10 +316,63 @@ class AgentLoop:
         return await self._execute(name, args, emit)
 
     async def _execute(self, name: str, args: dict[str, Any], emit: Emit) -> tuple[bool, str]:
-        """统一执行入口：run_command 桥接到 VS Code 终端（或 pty 回退），其余走注册表。"""
+        """统一执行入口：run_command 走终端桥，task 派生子 Agent，其余走注册表。"""
         if name == "run_command":
             return await self._execute_run_command(args, emit)
+        if name == "task":
+            return await self._handle_task(args, emit)
         return await self.registry.execute(name, args)
+
+    async def _handle_task(self, args: dict[str, Any], emit: Emit) -> tuple[bool, str]:
+        """派生一个只读子 Agent（独立会话 + 独立上下文），跑完把结论喂回主 Agent。"""
+        subtask = str(args.get("prompt", "")).strip()
+        if not subtask:
+            return False, "task 需要 prompt 参数（给子 Agent 的聚焦任务）"
+        await emit(
+            "subagent_log",
+            {"tool": "task", "brief": f"启动子 Agent：{subtask[:40]}", "ok": None},
+        )
+
+        sub_session = self.store.create_session()
+        sub_registry = build_registry(read_only=True)
+        sub_gateway = Gateway()
+        sub_loop = AgentLoop(
+            self.model, sub_registry, sub_gateway, self.store, self.settings,
+        )
+        sub_editor = {
+            "workspaceRoot": self._workspace_root,
+            "currentFile": None,
+            "selection": None,
+            "openFiles": [],
+        }
+        # 子 Agent 的工具调用转发给前端（subagent_log），供「子代理」标签显示；文本/权限不外泄
+        async def sub_emit(kind: str, payload: dict[str, Any]) -> None:
+            if kind in ("tool_call", "tool_result"):
+                args = payload.get("arguments", {})
+                brief = json.dumps(args, ensure_ascii=False)[:80]
+                await emit(
+                    "subagent_log",
+                    {
+                        "tool": payload.get("tool", ""),
+                        "brief": brief,
+                        "ok": None if kind == "tool_call" else bool(payload.get("ok", False)),
+                    },
+                )
+
+        try:
+            result_text = await asyncio.wait_for(
+                sub_loop.run(sub_session, subtask, sub_editor, sub_emit),
+                timeout=self.settings.task_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            return False, "子 Agent 超时"
+        except Exception as e:  # noqa: BLE001
+            logger.exception("subagent failed")
+            return False, f"子 Agent 失败：{e}"
+
+        if result_text:
+            return True, f"[子 Agent 结论]\n{result_text[:3000]}"
+        return False, "子 Agent 未产出结论"
 
     async def _execute_run_command(self, args: dict[str, Any], emit: Emit) -> tuple[bool, str]:
         if self.terminal is None:

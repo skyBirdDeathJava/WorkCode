@@ -731,6 +731,7 @@ function getWebviewHtml(): string {
   const tools = {};
   const tasks = [];
   const editItems = [];
+  const subagents = [];
   let activeTab = '';
   let ctxPath = '';
   let currentModelId = 'deepseek/deepseek-flash';
@@ -794,7 +795,12 @@ function getWebviewHtml(): string {
           }).join('')
         : '<div class="tab-empty">暂无任务</div>';
     } else if (activeTab === 'agents') {
-      html = '<div class="tab-empty">暂无子代理</div>';
+      html = subagents.length
+        ? subagents.map(function (s) {
+            const cls = s.ok === true ? 'ok' : s.ok === false ? 'err' : '';
+            return '<div class="tab-row ' + cls + '">' + escapeHtml('子代理 ' + s.tool + ' ' + s.brief) + '</div>';
+          }).join('')
+        : '<div class="tab-empty">暂无子代理</div>';
     } else {
       html = editItems.length
         ? editItems.map(function (t) {
@@ -1580,6 +1586,14 @@ function getWebviewHtml(): string {
           assistant.textContent = assistantText;
         }
         messages.scrollTop = messages.scrollHeight;
+        break;
+      case 'subagent_log':
+        subagents.push({
+          tool: String(evt.payload.tool || ''),
+          brief: String(evt.payload.brief || ''),
+          ok: evt.payload.ok ?? null,
+        });
+        if (activeTab === 'agents') renderTabPanel();
         break;
       case 'tool_call':
         // 工具调用后开新气泡：避免工具前的文本和最终答案粘连成一行，导致标题识别失败

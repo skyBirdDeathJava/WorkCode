@@ -165,6 +165,47 @@ async def test_loop_deadlock_detection(tmp_path: Path) -> None:
         kind == "error" and "重复调用" in payload.get("message", "")
         for kind, payload in events
     ), "应触发重复调用检测"
+    # 出错/死循环停止时，不应再报「已达上限」误导
+    assert not any(
+        kind == "error" and "已达上限" in payload.get("message", "")
+        for kind, payload in events
+    ), "出错停止不应误报已达上限"
     # 工具调用次数应很少（远小于 max_steps）
     tool_calls = sum(1 for k, _ in events if k == "tool_call")
     assert tool_calls <= 3, f"应尽早停止，实际调用了 {tool_calls} 次"
+
+
+async def test_loop_subagent_task(tmp_path: Path) -> None:
+    """主 Agent 派生子 Agent（task）：权限确认后，子 Agent 结论喂回主 Agent。"""
+    sessions = str(tmp_path / "sessions")
+    store = SessionStore(sessions)
+    session = store.create_session()
+    gateway = Gateway()
+    loop = AgentLoop(
+        MockModel(),
+        build_registry(),
+        gateway,
+        store,
+        Settings(session_dir=sessions),
+    )
+    editor = {"workspaceRoot": str(tmp_path), "currentFile": None, "selection": None, "openFiles": []}
+    events: list[tuple[str, dict]] = []
+    perm_event = asyncio.Event()
+    perm_rid: dict[str, str] = {}
+
+    async def emit(kind: str, payload: dict) -> None:
+        events.append((kind, payload))
+        if kind == "permission_request":
+            perm_rid["id"] = payload["requestId"]
+            perm_event.set()
+
+    loop_task = asyncio.create_task(loop.run(session, "!tool task 探索一下这个项目", editor, emit))
+    await perm_event.wait()
+    gateway.resolve(perm_rid["id"], True)
+    await loop_task
+
+    # 子 Agent 结论应作为 tool_result 喂回主 Agent
+    assert any(
+        kind == "tool_result" and "子 Agent 结论" in payload.get("output", "")
+        for kind, payload in events
+    ), "应返回子 Agent 结论"

@@ -39,6 +39,7 @@ export type ServerMessageType =
   | 'terminal_exec'
   | 'reasoning_delta'
   | 'memory_content'
+  | 'subagent_log'
   | 'error'
   | 'done';
 

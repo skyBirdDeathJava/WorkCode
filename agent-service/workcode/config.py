@@ -50,12 +50,14 @@ class Settings:
     auto_commit: bool = field(
         default_factory=lambda: _env_bool("WORKCODE_AUTO_COMMIT")
     )
+    task_timeout_seconds: float = 60.0  # 子 Agent（task 工具）超时
     # 单条消息内模型连续工具调用的步数上限即单轮对话的 Agent 循环次数（实际无限，默认 10000；真死循环由重复调用检测兜底）
     max_steps: int = field(
         default_factory=lambda: int(os.environ.get("WORKCODE_MAX_STEPS", "10000"))
     )
+    # 上下文预算（默认 128K）：子 Agent 探索复杂任务需要大上下文；超限仍由自动压缩兜底
     max_context_tokens: int = field(
-        default_factory=lambda: int(os.environ.get("WORKCODE_MAX_CONTEXT_TOKENS", "16000"))
+        default_factory=lambda: int(os.environ.get("WORKCODE_MAX_CONTEXT_TOKENS", "128000"))
     )
     model_timeout_seconds: float = 120.0
     permission_timeout_seconds: float = 30.0

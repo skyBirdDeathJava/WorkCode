@@ -221,7 +221,13 @@ def build_messages(
         total = sum(estimate_tokens(m.get("content", "")) for m in messages)
         if total <= max_tokens:
             break
-        messages.pop(1)  # 丢弃最旧的 user/assistant/tool 历史消息
+        # 丢弃最旧轮次。若最旧的是 assistant(tool_calls)，必须连同它跟随的
+        # tool 消息一起删，否则会留下没有前置 tool_calls 的 tool 消息 → 模型 400。
+        end = 1
+        if messages[1].get("role") == "assistant" and messages[1].get("tool_calls"):
+            while end + 1 < len(messages) and messages[end + 1].get("role") == "tool":
+                end += 1
+        del messages[1 : end + 1]
     return messages
 
 

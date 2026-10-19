@@ -84,6 +84,14 @@ class MockModel(ModelProvider):
                     }
                 ]
             )
+        if content.startswith("!tool task"):
+            rest = content[len("!tool task") :].strip()
+            prompt = rest.splitlines()[0] if rest else "探索一下"
+            return StepResult(
+                tool_calls=[
+                    {"id": "mock-task-1", "name": "task", "arguments": {"prompt": prompt}}
+                ]
+            )
         if content.startswith("!tool run_command"):
             # 执行命令（非白名单命令走权限弹窗）；只取指令后第一行作为命令
             rest = content[len("!tool run_command") :].strip()

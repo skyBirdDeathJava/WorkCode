@@ -170,6 +170,12 @@ class ReasoningDeltaPayload(BaseModel):
     delta: str
 
 
+class SubagentLogPayload(BaseModel):
+    tool: str
+    brief: str
+    ok: Optional[bool] = None  # None=调用中，True/False=结果
+
+
 class DiffPreviewPayload(BaseModel):
     requestId: str
     path: str
@@ -203,6 +209,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "memory_add": MemoryAddPayload,
     "set_allowed": SetAllowedPayload,
     "memory_content": MemoryContentPayload,
+    "subagent_log": SubagentLogPayload,
     "ready": ReadyPayload,
     "session_started": SessionStartedPayload,
     "session_list": SessionListPayload,

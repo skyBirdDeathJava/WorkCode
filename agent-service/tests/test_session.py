@@ -134,6 +134,27 @@ def test_render_user_message_ignores_missing_ref(tmp_path: Path) -> None:
     assert "【引用文件】" not in rendered
 
 
+def test_build_messages_trim_keeps_tool_pairing(tmp_path: Path) -> None:
+    """裁剪历史时不能破坏 tool/tool_calls 配对（否则模型 400）。"""
+    from workcode.agent.context import build_messages
+
+    ctx = {"workspaceRoot": str(tmp_path), "currentFile": None, "selection": None, "openFiles": []}
+    # 大历史：assistant(tool_calls) + tool + assistant 大文本，逼裁剪
+    history = [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "X" * 3000},
+        {"role": "assistant", "content": "回答" * 1500},
+    ]
+    messages = build_messages(history, ctx, max_tokens=800)
+    # 校验不变量：任何 tool 消息前面必须是带 tool_calls 的 assistant
+    for i, m in enumerate(messages):
+        if m.get("role") == "tool":
+            prev = messages[i - 1]
+            assert prev.get("role") == "assistant" and prev.get("tool_calls"), (
+                f"位置 {i} 的 tool 缺少前置 tool_calls，会造成模型 400"
+            )
+
+
 def test_build_messages_mode_hint(tmp_path: Path) -> None:
     from workcode.agent.context import build_messages
 
