@@ -100,6 +100,10 @@ class MemoryAddPayload(BaseModel):
     text: str
 
 
+class InitMemoryPayload(BaseModel):
+    requestId: Optional[str] = None
+
+
 class MemoryContentPayload(BaseModel):
     requestId: Optional[str] = None
     content: str
@@ -207,6 +211,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "set_effort": SetEffortPayload,
     "get_memory": GetMemoryPayload,
     "memory_add": MemoryAddPayload,
+    "init_memory": InitMemoryPayload,
     "set_allowed": SetAllowedPayload,
     "memory_content": MemoryContentPayload,
     "subagent_log": SubagentLogPayload,

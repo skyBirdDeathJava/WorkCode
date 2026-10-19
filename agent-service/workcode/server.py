@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -60,6 +61,7 @@ def make_app(settings: Settings) -> FastAPI:
         effort: str = settings.effort
         mode = "manual"  # manual | auto | plan
         terminal_supported = False  # 插件连接时声明，决定 run_command 是否桥接到 VS Code 终端
+        workspace_root = ""  # 插件握手时声明的工作区根目录
 
         def session_id() -> Optional[str]:
             return session.id if session else None
@@ -91,6 +93,8 @@ def make_app(settings: Settings) -> FastAPI:
                         api_key = payload["apiKey"]
                     if payload.get("model"):
                         model_name = payload["model"]
+                    if payload.get("workspaceRoot"):
+                        workspace_root = payload["workspaceRoot"]
                     if payload.get("terminalSupport"):
                         terminal_supported = True
                     if isinstance(payload.get("allowedCommands"), list):
@@ -147,6 +151,23 @@ def make_app(settings: Settings) -> FastAPI:
                         context.append_user_memory(settings.memory_file, text)
                     content = context.load_user_memory(settings.memory_file)
                     await emit("memory_content", {"requestId": payload.get("requestId", ""), "content": content})
+
+                elif kind == "init_memory":
+                    content = context.generate_project_memory(workspace_root)
+                    try:
+                        (Path(workspace_root) / "WorkCode.md").write_text(content, encoding="utf-8")
+                        written = True
+                    except Exception:
+                        written = False
+                    await emit(
+                        "memory_content",
+                        {
+                            "requestId": payload.get("requestId", ""),
+                            "content": content,
+                            "generated": True,
+                            "written": written,
+                        },
+                    )
 
                 elif kind == "new_session":
                     if task is not None and not task.done():

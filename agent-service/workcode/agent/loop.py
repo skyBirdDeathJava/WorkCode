@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from ..config import Settings
 from ..gateway import Gateway
+from ..hooks import load_hooks, run_hook
 from ..session.store import Session, SessionStore
 from ..tools import build_registry, write as write_tools
 from ..tools.cmd import TerminalSession
@@ -99,6 +100,7 @@ class AgentLoop:
         self.mode = mode
         self._workspace_root = ""
         self._usage: dict[str, int] = {"promptTokens": 0, "completionTokens": 0}
+        self.hooks: dict = {}
 
     async def run(
         self,
@@ -126,6 +128,10 @@ class AgentLoop:
         if git_ctx:
             extras.append(f"【Git 状态】\n{git_ctx}")
         extra_system = "\n\n".join(extras)
+
+        # Hooks：生命周期脚本（.workcode/hooks.json）
+        self.hooks = load_hooks(self._workspace_root)
+        await run_hook(self.hooks, "UserPromptSubmit")
 
         # 死循环检测状态 + 是否因错误提前停止
         last_sig: tuple = ()
@@ -196,7 +202,12 @@ class AgentLoop:
 
             if result.text: #本次agent循环调用大模型返回了答案文本，最终答案，因为如果不是最终答案，模型会返回工具调用，工具调用时没有content的
                 self._append_message(session, {"role": "assistant", "content": result.text})
-                await emit("done", {"usage": dict(self._usage)})
+                await run_hook(self.hooks, "Stop")
+                usage = dict(self._usage)
+                usage["costUsd"] = round(
+                    context.estimate_cost_usd(getattr(self.model, "model", ""), usage), 6
+                )
+                await emit("done", {"usage": usage})
                 return result.text
 
             # 既无文本也无工具调用：异常情况
@@ -204,6 +215,7 @@ class AgentLoop:
             await emit("error", {"message": "模型未返回任何内容，已停止"})
             break
 
+        await run_hook(self.hooks, "Stop")
         # 只有真的跑满步数才报「已达上限」；出错/死循环停止不报（避免误导）
         if not aborted:
             await emit(
@@ -269,6 +281,20 @@ class AgentLoop:
 
             await emit("tool_call", {"requestId": call_id, "tool": name, "arguments": args})
 
+            # PreToolUse Hook：退出码 2 → 拦截该工具（当作拒绝）
+            tool_env = {
+                "WORKCODE_TOOL": name,
+                "WORKCODE_ARGS": json.dumps(args, ensure_ascii=False)[:2000],
+            }
+            if await run_hook(self.hooks, "PreToolUse", env=tool_env) == 2:
+                ok, output = False, f"PreToolUse 拦截了 {name}"
+                await emit("tool_result", _result_payload(call_id, name, ok, output, args))
+                self._append_message(
+                    session,
+                    {"role": "tool", "tool_call_id": call_id, "content": f"[工具失败] {output}"[:MAX_TOOL_OUTPUT_CHARS]},
+                )
+                continue
+
             decision = self.gateway.decide(name, args, workspace_root, mode=self.mode)
 
             if decision == "deny":
@@ -284,6 +310,14 @@ class AgentLoop:
             else:  # allow
                 ok, output = await self._execute(name, args, emit)
                 await emit("tool_result", _result_payload(call_id, name, ok, output, args))
+
+            # PostToolUse Hook：工具执行后触发（改文件后自动格式化等）
+            post_env = {
+                "WORKCODE_TOOL": name,
+                "WORKCODE_PATH": args.get("path", "") if isinstance(args.get("path", ""), str) else "",
+                "WORKCODE_OK": "1" if ok else "0",
+            }
+            await run_hook(self.hooks, "PostToolUse", env=post_env)
 
             # 把工具结果作为 tool 角色消息写回历史（落盘），供模型继续推理
             result_text = output if ok else f"[工具失败] {output}"

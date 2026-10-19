@@ -72,6 +72,46 @@ async def test_compact_under_budget_noop() -> None:
     assert summary == ""
 
 
+@pytest.mark.asyncio
+async def test_hooks_load_and_run(tmp_path: Path) -> None:
+    from workcode.hooks import load_hooks, run_hook
+
+    (tmp_path / ".workcode").mkdir()
+    (tmp_path / ".workcode" / "hooks.json").write_text(
+        '{"PreToolUse": "echo block && exit 2", "Stop": "echo done > ' + str(tmp_path / "stop.txt") + '"}',
+        encoding="utf-8",
+    )
+    hooks = load_hooks(str(tmp_path))
+    assert "PreToolUse" in hooks and "Stop" in hooks
+    assert await run_hook(hooks, "PreToolUse") == 2  # 退出码 2 → 拦截
+    await run_hook(hooks, "Stop")
+    assert (tmp_path / "stop.txt").exists(), "Stop 钩子应执行"
+
+
+def test_generate_project_memory(tmp_path: Path) -> None:
+    from workcode.agent.context import generate_project_memory
+
+    (tmp_path / "package.json").write_text('{"name":"demo","scripts":{"test":"jest"}}', encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.ts").write_text("", encoding="utf-8")
+    (tmp_path / "src" / "util.ts").write_text("", encoding="utf-8")
+
+    content = generate_project_memory(str(tmp_path))
+    assert "TypeScript" in content or "ts" in content
+    assert "test" in content  # 脚本
+    assert "src" in content    # 顶层结构
+
+
+def test_estimate_cost_usd() -> None:
+    from workcode.agent.context import estimate_cost_usd
+
+    usage = {"promptTokens": 1000000, "completionTokens": 1000000}
+    cost = estimate_cost_usd("deepseek/deepseek-flash", usage)
+    assert cost > 0
+    pro = estimate_cost_usd("deepseek/deepseek-v4-pro", usage)
+    assert pro > cost  # v4-pro 更贵
+
+
 def test_user_memory_read_append(tmp_path: Path) -> None:
     from workcode.agent.context import append_user_memory, load_user_memory
 

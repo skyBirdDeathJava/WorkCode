@@ -70,6 +70,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case 'memoryAdd':
           void this.addMemory(String(msg.text ?? ''));
           break;
+        case 'initMemory':
+          void this.initProjectMemory();
+          break;
         case 'shellEscape':
           this.runShellEscape(String(msg.command ?? ''));
           break;
@@ -230,6 +233,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   /** 读取用户记忆并回推给 Webview。 */
   private async sendMemory(): Promise<void> {
     const content = (await this.client.getMemory()) || '';
+    void this.view?.webview.postMessage({ type: 'memoryContent', content });
+  }
+
+  /** /init：让服务扫描项目并生成 WorkCode.md，回推给 Webview 展示。 */
+  private async initProjectMemory(): Promise<void> {
+    const content = (await this.client.initMemory()) || '';
     void this.view?.webview.postMessage({ type: 'memoryContent', content });
   }
 
@@ -1211,12 +1220,14 @@ function getWebviewHtml(): string {
     { cmd: '/effort', desc: '切换思考程度 none / low / high / max', needsArg: true },
     { cmd: '/memory', desc: '查看 / 追加跨项目用户记忆，如 /memory 我喜欢用单引号' },
     { cmd: '/allow', desc: '预批准命令前缀，如 /allow npm test（匹配后不再确认）', needsArg: true },
+    { cmd: '/init', desc: '扫描项目自动生成 WorkCode.md 项目约定' },
     { cmd: '/cost', desc: '查看本次会话 token 用量' },
   ];
   const SLASH_HELP = SLASH_COMMANDS.map(function (c) {
     return c.cmd + '  ' + c.desc;
   }).join('\\n');
   let sessionTokens = 0;
+  let sessionCost = 0;
 
   function handleSlash(content) {
     const t = content.trim();
@@ -1270,8 +1281,11 @@ function getWebviewHtml(): string {
       } else {
         addBubble('assistant', '用法：/allow <命令前缀>，如 /allow npm test');
       }
+    } else if (cmd === '/init') {
+      vscode.postMessage({ type: 'initMemory' });
     } else if (cmd === '/cost') {
-      addBubble('assistant', '本次会话累计约 ' + sessionTokens + ' tokens');
+      const cost = sessionCost > 0 ? '，约 $' + sessionCost.toFixed(4) : '';
+      addBubble('assistant', '本次会话累计约 ' + sessionTokens + ' tokens' + cost);
     } else {
       addBubble('assistant', '未知命令：' + cmd + '。输入 /help 查看可用命令');
     }
@@ -1628,9 +1642,11 @@ function getWebviewHtml(): string {
         const usage = evt.payload.usage || {};
         const prompt = usage.promptTokens || 0;
         const total = prompt + (usage.completionTokens || 0);
+        const cost = usage.costUsd || 0;
         sessionTokens += total;
+        sessionCost += cost;
         const pct = prompt ? Math.min(100, Math.round(prompt / 128000 * 100)) : 0;
-        setUsagePct(pct, total ? ('本轮约 ' + total + ' tokens') : '');
+        setUsagePct(pct, total ? ('本轮约 ' + total + ' tokens · $' + cost.toFixed(4)) : '');
         setBusy(false);
         setStatus('✓ 完成');
         assistant = null;

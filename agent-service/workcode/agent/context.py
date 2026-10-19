@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -78,6 +79,71 @@ def load_user_memory(memory_file: str) -> str:
         except OSError:
             return ""
     return ""
+
+
+def generate_project_memory(workspace_root: str) -> str:
+    """扫描项目结构，生成一份 WorkCode.md 项目约定模板（/init 用）。"""
+    if not workspace_root:
+        return "# WorkCode 项目约定\n\n（未检测到工作区）\n"
+    root = Path(workspace_root)
+
+    # 语言统计（跳过隐藏/产物目录）
+    from collections import Counter
+
+    langs: Counter = Counter()
+    for p in root.rglob("*"):
+        if p.is_file() and p.suffix:
+            parts = p.relative_to(root).parts
+            if any(part.startswith(".") for part in parts[:-1]):
+                continue
+            if p.name in ("node_modules", ".venv", "dist", "build"):
+                continue
+            langs[p.suffix.lstrip(".")] += 1
+    top_langs = [k for k, _ in langs.most_common(5)]
+
+    key_files = [
+        n for n in ("package.json", "pyproject.toml", "tsconfig.json", "Cargo.toml", "go.mod", "Makefile", "README.md")
+        if (root / n).is_file()
+    ]
+
+    scripts = ""
+    pj = root / "package.json"
+    if pj.is_file():
+        try:
+            scripts = "\n".join(f"- {k}: {v}" for k, v in json.loads(pj.read_text(encoding="utf-8")).get("scripts", {}).items())
+        except Exception:
+            pass
+
+    top_dirs = sorted(
+        d.name for d in root.iterdir()
+        if d.is_dir() and not d.name.startswith(".") and d.name not in ("node_modules", ".venv", "dist", "build", ".git")
+    )
+
+    lines = ["# WorkCode 项目约定\n"]
+    lines.append(f"## 技术栈\n\n主要语言：{', '.join(top_langs) or '（未检测）'}\n")
+    if key_files:
+        lines.append(f"关键配置文件：{', '.join(key_files)}\n")
+    if scripts:
+        lines.append(f"## 常用命令\n\n{scripts}\n")
+    if top_dirs:
+        lines.append(f"## 顶层结构\n\n{', '.join(top_dirs)}\n")
+    lines.append("\n> 由 WorkCode /init 生成，可编辑补充项目约定。")
+    return "\n".join(lines)
+
+
+def estimate_cost_usd(model: str, usage: dict) -> float:
+    """按模型估算美元成本（约；每百万 token 单价）。"""
+    key = "deepseek-v4-pro" if "v4-pro" in model else "deepseek-flash"
+    price = MODEL_PRICES.get(key, MODEL_PRICES["deepseek-flash"])
+    prompt = usage.get("promptTokens", 0) / 1e6 * price["in"]
+    completion = usage.get("completionTokens", 0) / 1e6 * price["out"]
+    return prompt + completion
+
+
+MODEL_PRICES = {
+    "deepseek-flash": {"in": 0.14, "out": 0.28},
+    "deepseek-v4-pro": {"in": 0.56, "out": 1.68},
+}
 
 
 def append_user_memory(memory_file: str, text: str) -> None:

@@ -21,6 +21,7 @@ export type ClientMessageType =
   | 'set_effort'
   | 'get_memory'
   | 'memory_add'
+  | 'init_memory'
   | 'set_allowed'
   | 'cancel'
   | 'new_session';

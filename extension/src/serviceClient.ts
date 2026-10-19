@@ -97,6 +97,12 @@ export class ServiceClient extends vscode.Disposable {
     return resp?.content as string | undefined;
   }
 
+  /** /init：让服务扫描项目结构，生成 WorkCode.md 项目约定。 */
+  async initMemory(): Promise<string | undefined> {
+    const resp = await this.request('init_memory', {});
+    return resp?.content as string | undefined;
+  }
+
   /** 请求-响应：带 requestId 的往返，服务端在响应里回显 requestId。请求前先确保连接。 */
   async request(type: string, payload: Record<string, unknown>): Promise<Record<string, unknown> | undefined> {
     try {
